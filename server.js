@@ -25,6 +25,205 @@ const upload = multer({
   }
 });
 
+// Generate smart search terms for eBay
+function generateSearchTerms(itemName) {
+  const terms = [];
+  const lower = itemName.toLowerCase();
+  
+  // Original term
+  terms.push(itemName);
+  
+  // Brand + category combinations
+  if (lower.includes('wilson') && lower.includes('football')) {
+    terms.push('Wilson NFL football');
+    terms.push('Wilson football official');
+    terms.push('Wilson composite football');
+    terms.push('football Wilson');
+    terms.push('NFL football');
+    terms.push('football official size');
+  }
+  
+  if (lower.includes('baseball') && lower.includes('equipment')) {
+    terms.push('baseball cap');
+    terms.push('baseball hat');
+    terms.push('MLB cap');
+    terms.push('sports cap');
+  }
+  
+  if (lower.includes('baseball') && lower.includes('cap')) {
+    terms.push('baseball cap');
+    terms.push('MLB cap');
+    terms.push('fitted cap');
+    terms.push('snapback cap');
+  }
+  
+  if (lower.includes('hat') && !lower.includes('baseball')) {
+    terms.push('baseball cap');
+    terms.push('sports hat');
+    terms.push('fitted hat');
+  }
+  
+  if (lower.includes('titleist')) {
+    terms.push('Titleist golf hat');
+    terms.push('Titleist cap');
+    terms.push('golf cap');
+    terms.push('golf hat');
+  }
+  
+  // Generic category fallbacks
+  if (lower.includes('football')) {
+    terms.push('NFL football');
+    terms.push('football official');
+    terms.push('composite football');
+    terms.push('football leather');
+  }
+  
+  if (lower.includes('basketball')) {
+    terms.push('basketball official');
+    terms.push('NBA basketball');
+    terms.push('basketball spalding');
+  }
+  
+  if (lower.includes('sneakers') || lower.includes('shoes')) {
+    terms.push('athletic shoes');
+    terms.push('running shoes');
+    terms.push('basketball shoes');
+  }
+  
+  if (lower.includes('electronics')) {
+    terms.push('vintage electronics');
+    terms.push('electronic device');
+  }
+  
+  // Remove duplicates and return
+  return [...new Set(terms)];
+}
+
+// Perform actual eBay search
+async function performEbaySearch(searchTerm) {
+  try {
+    const encodedTerm = encodeURIComponent(searchTerm);
+    
+    // eBay Finding API - findCompletedItems
+    const url = `https://svcs.ebay.com/services/search/FindingService/v1?` +
+      `OPERATION-NAME=findCompletedItems&` +
+      `SERVICE-VERSION=1.13.0&` +
+      `SECURITY-APPNAME=${process.env.EBAY_APP_ID}&` +
+      `RESPONSE-DATA-FORMAT=JSON&` +
+      `keywords=${encodedTerm}&` +
+      `itemFilter(0).name=SoldItemsOnly&` +
+      `itemFilter(0).value=true&` +
+      `itemFilter(1).name=ListingType&` +
+      `itemFilter(1).value(0)=AuctionWithBIN&` +
+      `itemFilter(1).value(1)=FixedPrice&` +
+      `itemFilter(2).name=MinPrice&` +
+      `itemFilter(2).value=1&` +
+      `itemFilter(2).paramName=Currency&` +
+      `itemFilter(2).paramValue=USD&` +
+      `sortOrder=EndTimeSoonest&` +
+      `paginationInput.entriesPerPage=50`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (!data.findCompletedItemsResponse || 
+        !data.findCompletedItemsResponse[0].searchResult ||
+        !data.findCompletedItemsResponse[0].searchResult[0].item) {
+      return [];
+    }
+    
+    const items = data.findCompletedItemsResponse[0].searchResult[0].item;
+    
+    return items.map(item => {
+      const endTime = new Date(item.listingInfo[0].endTime[0]);
+      const startTime = new Date(item.listingInfo[0].startTime[0]);
+      const listingDays = Math.ceil((endTime - startTime) / (1000 * 60 * 60 * 24));
+      
+      return {
+        title: item.title[0],
+        price: parseFloat(item.sellingStatus[0].currentPrice[0].__value__),
+        currency: item.sellingStatus[0].currentPrice[0]['@currencyId'],
+        endTime: endTime,
+        listingDays: listingDays,
+        condition: item.condition ? item.condition[0].conditionDisplayName[0] : 'Unknown'
+      };
+    }).filter(item => item.price > 0 && item.price < 1000); // Filter out extreme prices
+    
+  } catch (error) {
+    console.error('Error in performEbaySearch:', error);
+    return [];
+  }
+}
+
+// Get eBay sold listings with smart search
+async function getEbaySoldListings(itemName) {
+  try {
+    // Try multiple search strategies for better results
+    const searchStrategies = generateSearchTerms(itemName);
+    
+    for (const searchTerm of searchStrategies) {
+      console.log('🔍 Trying eBay search:', searchTerm);
+      const results = await performEbaySearch(searchTerm);
+      
+      if (results.length > 0) {
+        console.log('✅ Found', results.length, 'results with search term:', searchTerm);
+        return results;
+      }
+    }
+    
+    console.log('⚠️ No results found with any search term');
+    return [];
+    
+  } catch (error) {
+    console.error('Error fetching eBay sold listings:', error);
+    return [];
+  }
+}
+
+async function getEbayActiveListings(itemName) {
+  try {
+    // Use the same smart search terms for active listings
+    const searchStrategies = generateSearchTerms(itemName);
+    
+    for (const searchTerm of searchStrategies) {
+      const encodedTerm = encodeURIComponent(searchTerm);
+      
+      // eBay Finding API - findItemsByKeywords for active listings
+      const url = `https://svcs.ebay.com/services/search/FindingService/v1?` +
+        `OPERATION-NAME=findItemsByKeywords&` +
+        `SERVICE-VERSION=1.13.0&` +
+        `SECURITY-APPNAME=${process.env.EBAY_APP_ID}&` +
+        `RESPONSE-DATA-FORMAT=JSON&` +
+        `keywords=${encodedTerm}&` +
+        `itemFilter(0).name=ListingType&` +
+        `itemFilter(0).value(0)=AuctionWithBIN&` +
+        `itemFilter(0).value(1)=FixedPrice&` +
+        `itemFilter(1).name=MinPrice&` +
+        `itemFilter(1).value=1&` +
+        `paginationInput.entriesPerPage=50`;
+      
+      const response = await fetch(url);
+      const data = await response.json();
+      
+      if (data.findItemsByKeywordsResponse && 
+          data.findItemsByKeywordsResponse[0].searchResult &&
+          data.findItemsByKeywordsResponse[0].searchResult[0].item) {
+        const itemCount = data.findItemsByKeywordsResponse[0].searchResult[0].item.length;
+        if (itemCount > 0) {
+          console.log('📈 Found', itemCount, 'active listings with term:', searchTerm);
+          return itemCount;
+        }
+      }
+    }
+    
+    return 0;
+    
+  } catch (error) {
+    console.error('Error fetching eBay active listings:', error);
+    return 0;
+  }
+}
+
 // eBay API functions
 async function getEbayMarketData(itemName) {
   try {
@@ -36,7 +235,7 @@ async function getEbayMarketData(itemName) {
     
     // Get active listings to calculate sell-through rate
     const activeListings = await getEbayActiveListings(itemName);
-    console.log('📈 Found', activeListings.length, 'active listings');
+    console.log('📈 Found', activeListings, 'active listings');
     
     if (soldListings.length === 0) {
       console.log('⚠️ No sold listings found, using fallback data');
@@ -44,15 +243,15 @@ async function getEbayMarketData(itemName) {
     }
     
     // Calculate market metrics from real eBay data
-    const prices = soldListings.map(item => parseFloat(item.price));
+    const prices = soldListings.map(item => item.price);
     const avgSoldPrice = Math.round(prices.reduce((sum, price) => sum + price, 0) / prices.length);
     
     // Calculate sell-through rate (sold vs total listings)
-    const totalListings = soldListings.length + activeListings.length;
+    const totalListings = soldListings.length + activeListings;
     const sellThroughRate = totalListings > 0 ? Math.round((soldListings.length / totalListings) * 100) : 50;
     
     // Calculate average listing time from sold items
-    const listingTimes = soldListings.map(item => item.listingDays).filter(days => days > 0);
+    const listingTimes = soldListings.map(item => item.listingDays).filter(days => days > 0 && days < 365);
     const avgListingTime = listingTimes.length > 0 ? 
       Math.round(listingTimes.reduce((sum, days) => sum + days, 0) / listingTimes.length) : 15;
     
@@ -69,7 +268,7 @@ async function getEbayMarketData(itemName) {
       seasonality: 'Year-round', // Could be enhanced with seasonal analysis
       dataSource: 'eBay API',
       soldListingsCount: soldListings.length,
-      activeListingsCount: activeListings.length
+      activeListingsCount: activeListings
     };
     
     console.log('✅ eBay market data calculated:', marketData);
@@ -81,96 +280,21 @@ async function getEbayMarketData(itemName) {
   }
 }
 
-async function getEbaySoldListings(itemName) {
-  try {
-    const searchTerms = encodeURIComponent(itemName);
-    
-    // eBay Finding API - findCompletedItems
-    const url = `https://svcs.ebay.com/services/search/FindingService/v1?` +
-      `OPERATION-NAME=findCompletedItems&` +
-      `SERVICE-VERSION=1.13.0&` +
-      `SECURITY-APPNAME=${process.env.EBAY_APP_ID}&` +
-      `RESPONSE-DATA-FORMAT=JSON&` +
-      `keywords=${searchTerms}&` +
-      `itemFilter(0).name=SoldItemsOnly&` +
-      `itemFilter(0).value=true&` +
-      `itemFilter(1).name=ListingType&` +
-      `itemFilter(1).value=AuctionWithBIN&` +
-      `itemFilter(1).value=FixedPrice&` +
-      `sortOrder=EndTimeSoonest&` +
-      `paginationInput.entriesPerPage=50`;
-    
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (!data.findCompletedItemsResponse || !data.findCompletedItemsResponse[0].searchResult) {
-      return [];
-    }
-    
-    const items = data.findCompletedItemsResponse[0].searchResult[0].item || [];
-    
-    return items.map(item => {
-      const endTime = new Date(item.listingInfo[0].endTime[0]);
-      const startTime = new Date(item.listingInfo[0].startTime[0]);
-      const listingDays = Math.ceil((endTime - startTime) / (1000 * 60 * 60 * 24));
-      
-      return {
-        title: item.title[0],
-        price: item.sellingStatus[0].currentPrice[0].__value__,
-        currency: item.sellingStatus[0].currentPrice[0]['@currencyId'],
-        endTime: endTime,
-        listingDays: listingDays,
-        condition: item.condition ? item.condition[0].conditionDisplayName[0] : 'Unknown'
-      };
-    });
-    
-  } catch (error) {
-    console.error('Error fetching eBay sold listings:', error);
-    return [];
-  }
-}
-
-async function getEbayActiveListings(itemName) {
-  try {
-    const searchTerms = encodeURIComponent(itemName);
-    
-    // eBay Finding API - findItemsByKeywords for active listings
-    const url = `https://svcs.ebay.com/services/search/FindingService/v1?` +
-      `OPERATION-NAME=findItemsByKeywords&` +
-      `SERVICE-VERSION=1.13.0&` +
-      `SECURITY-APPNAME=${process.env.EBAY_APP_ID}&` +
-      `RESPONSE-DATA-FORMAT=JSON&` +
-      `keywords=${searchTerms}&` +
-      `itemFilter(0).name=ListingType&` +
-      `itemFilter(0).value=AuctionWithBIN&` +
-      `itemFilter(0).value=FixedPrice&` +
-      `paginationInput.entriesPerPage=50`;
-    
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (!data.findItemsByKeywordsResponse || !data.findItemsByKeywordsResponse[0].searchResult) {
-      return [];
-    }
-    
-    const items = data.findItemsByKeywordsResponse[0].searchResult[0].item || [];
-    return items.length;
-    
-  } catch (error) {
-    console.error('Error fetching eBay active listings:', error);
-    return 0;
-  }
-}
-
 function getFallbackMarketData(itemName) {
   // Fallback data when eBay API fails
   const categoryLower = itemName.toLowerCase();
   
+  if (categoryLower.includes('wilson') && categoryLower.includes('football')) {
+    return { avgSoldPrice: 28, sellThroughRate: 65, avgListingTime: 10, demandLevel: "High", seasonality: "Fall peak", dataSource: 'Estimate' };
+  }
   if (categoryLower.includes('football')) {
-    return { avgSoldPrice: 25, sellThroughRate: 65, avgListingTime: 10, demandLevel: "Medium", seasonality: "Fall peak", dataSource: 'Estimate' };
+    return { avgSoldPrice: 25, sellThroughRate: 60, avgListingTime: 12, demandLevel: "Medium", seasonality: "Fall peak", dataSource: 'Estimate' };
+  }
+  if (categoryLower.includes('baseball') && (categoryLower.includes('cap') || categoryLower.includes('hat'))) {
+    return { avgSoldPrice: 22, sellThroughRate: 55, avgListingTime: 14, demandLevel: "Medium", seasonality: "Year-round", dataSource: 'Estimate' };
   }
   if (categoryLower.includes('hat') || categoryLower.includes('cap')) {
-    return { avgSoldPrice: 20, sellThroughRate: 50, avgListingTime: 14, demandLevel: "Medium", seasonality: "Year-round", dataSource: 'Estimate' };
+    return { avgSoldPrice: 18, sellThroughRate: 50, avgListingTime: 16, demandLevel: "Medium", seasonality: "Year-round", dataSource: 'Estimate' };
   }
   if (categoryLower.includes('baseball')) {
     return { avgSoldPrice: 35, sellThroughRate: 58, avgListingTime: 14, demandLevel: "Medium", seasonality: "Spring/Summer peak", dataSource: 'Estimate' };
@@ -309,6 +433,9 @@ function categorizeItem(detections, textDetections) {
   }
   if ((allContent.includes('hat') || allContent.includes('cap')) && allContent.includes('baseball')) {
     return 'Baseball Cap';
+  }
+  if ((allContent.includes('hat') || allContent.includes('cap')) && allContent.includes('titleist')) {
+    return 'Titleist Golf Hat';
   }
   if (allContent.includes('hat') || allContent.includes('cap')) {
     return 'Hat';
