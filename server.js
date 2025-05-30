@@ -128,9 +128,11 @@ async function searchEbayMarketplaceInsights(searchTerm, accessToken) {
   }
 }
 
-// Enhanced market data with better estimates
+// Enhanced market data with better estimates - FIXED VERSION
 function getEnhancedMarketData(itemName) {
   const categoryLower = itemName.toLowerCase();
+  
+  console.log('🎯 Enhanced market data for:', itemName, 'lowercase:', categoryLower);
   
   // Wilson Football - based on actual eBay research
   if (categoryLower.includes('wilson') && categoryLower.includes('football')) {
@@ -158,8 +160,9 @@ function getEnhancedMarketData(itemName) {
     };
   }
   
-  // Titleist Golf Hat - premium golf accessories
-  if (categoryLower.includes('titleist') && (categoryLower.includes('hat') || categoryLower.includes('cap'))) {
+ // Titleist Golf Hat - premium golf accessories (FIXED CHECK)
+  if (categoryLower.includes('titleist') && (categoryLower.includes('golf') || categoryLower.includes('hat') || categoryLower.includes('cap'))) {
+    console.log('✅ Matched Titleist Golf Hat pricing');
     return { 
       avgSoldPrice: 28, 
       sellThroughRate: 58, 
