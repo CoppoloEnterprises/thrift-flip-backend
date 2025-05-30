@@ -154,6 +154,41 @@ async function performEbaySearch(searchTerm) {
     return [];
   }
 }
+// Debug function to test eBay API directly
+app.get('/api/debug-ebay/:searchTerm', async (req, res) => {
+  try {
+    const searchTerm = req.params.searchTerm;
+    console.log('🔧 Debug: Testing eBay API with term:', searchTerm);
+    
+    const encodedTerm = encodeURIComponent(searchTerm);
+    const url = `https://svcs.ebay.com/services/search/FindingService/v1?` +
+      `OPERATION-NAME=findCompletedItems&` +
+      `SERVICE-VERSION=1.13.0&` +
+      `SECURITY-APPNAME=${process.env.EBAY_APP_ID}&` +
+      `RESPONSE-DATA-FORMAT=JSON&` +
+      `keywords=${encodedTerm}&` +
+      `itemFilter(0).name=SoldItemsOnly&` +
+      `itemFilter(0).value=true&` +
+      `paginationInput.entriesPerPage=10`;
+    
+    console.log('🔧 Debug URL:', url);
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    console.log('🔧 Debug Response:', JSON.stringify(data, null, 2));
+    
+    res.json({
+      searchTerm,
+      url,
+      response: data
+    });
+    
+  } catch (error) {
+    console.error('🔧 Debug Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Get eBay sold listings with smart search
 async function getEbaySoldListings(itemName) {
