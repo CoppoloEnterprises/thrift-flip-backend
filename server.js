@@ -80,73 +80,74 @@ function generateSearchTerms(itemName) {
   
   // Brand + category combinations
   if (lower.includes('wilson') && lower.includes('football')) {
-    terms.push('Wilson NFL football');
-    terms.push('football Wilson');
+    terms.push('wilson football');
+    terms.push('football');
   }
   
   if (lower.includes('athletic') && lower.includes('sneakers')) {
-    terms.push('nike shoes');
     terms.push('athletic shoes');
+    terms.push('sneakers');
   }
   
   if (lower.includes('footjoy') || (lower.includes('golf') && lower.includes('shoes'))) {
-    terms.push('Footjoy golf shoes');
+    terms.push('footjoy shoes');
     terms.push('golf shoes');
   }
   
   if (lower.includes('baseball') && (lower.includes('cap') || lower.includes('hat'))) {
     terms.push('baseball cap');
-    terms.push('MLB cap');
+    terms.push('baseball hat');
   }
   
   if (lower.includes('titleist')) {
-    terms.push('Titleist golf hat');
-    terms.push('golf cap');
+    terms.push('titleist hat');
+    terms.push('golf hat');
   }
   
   // Generic fallbacks
   if (lower.includes('football')) {
-    terms.push('NFL football');
+    terms.push('football');
   }
   
   if (lower.includes('hat') || lower.includes('cap')) {
-    terms.push('baseball cap');
+    terms.push('hat');
   }
   
   if (lower.includes('shoes') || lower.includes('sneakers')) {
-    terms.push('athletic shoes');
+    terms.push('shoes');
   }
   
   // Return only first 3 terms to avoid rate limiting
   return [...new Set(terms)].slice(0, 3);
 }
 
-// Search eBay using Browse API
+// Search eBay using Browse API - FIXED VERSION
 async function searchEbayBrowseAPI(searchTerm, accessToken) {
   try {
     const encodedTerm = encodeURIComponent(searchTerm);
     
-    // eBay Browse API endpoint
+    // eBay Browse API endpoint - corrected format
     const url = `https://api.ebay.com/buy/browse/v1/item_search?` +
       `q=${encodedTerm}&` +
-      `limit=50&` +
-      `filter=conditionIds:{1000|1500|2000|2500|3000}&` +
-      `filter=deliveryCountry:US&` +
-      `filter=priceCurrency:USD&` +
-      `sort=newlyListed`;
+      `limit=50`;
 
-    console.log('🔍 eBay Browse API search:', searchTerm);
+    console.log('🔍 eBay Browse API search URL:', url);
 
     const response = await fetch(url, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
-        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US'
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+        'X-EBAY-C-ENDUSERCTX': 'contextualLocation=country%3DUS,zip%3D19406'
       }
     });
 
+    console.log('📡 eBay API Response status:', response.status);
+    
     const data = await response.json();
+    
+    console.log('📋 eBay API Response keys:', Object.keys(data));
 
     if (data.itemSummaries && data.itemSummaries.length > 0) {
       console.log('✅ Found', data.itemSummaries.length, 'items with Browse API');
@@ -160,12 +161,16 @@ async function searchEbayBrowseAPI(searchTerm, accessToken) {
         imageUrl: item.image?.imageUrl,
         seller: item.seller?.username
       })).filter(item => item.price > 0 && item.price < 2000);
+    } else if (data.errors) {
+      console.error('❌ eBay API errors:', data.errors);
+    } else {
+      console.log('⚠️ No items found in response:', JSON.stringify(data, null, 2));
     }
 
     return [];
 
   } catch (error) {
-    console.error('Error searching eBay Browse API:', error);
+    console.error('❌ Error searching eBay Browse API:', error);
     return [];
   }
 }
@@ -247,8 +252,11 @@ function getFallbackMarketData(itemName) {
   if (categoryLower.includes('athletic') && categoryLower.includes('sneakers')) {
     return { avgSoldPrice: 65, sellThroughRate: 70, avgListingTime: 8, demandLevel: "High", seasonality: "Year-round", dataSource: 'Estimate' };
   }
-  if (categoryLower.includes('baseball') && (categoryLower.includes('cap') || categoryLower.includes('hat'))) {
+  if (categoryLower.includes('titleist') && (categoryLower.includes('hat') || categoryLower.includes('cap'))) {
     return { avgSoldPrice: 22, sellThroughRate: 55, avgListingTime: 14, demandLevel: "Medium", seasonality: "Year-round", dataSource: 'Estimate' };
+  }
+  if (categoryLower.includes('baseball') && (categoryLower.includes('cap') || categoryLower.includes('hat'))) {
+    return { avgSoldPrice: 18, sellThroughRate: 50, avgListingTime: 16, demandLevel: "Medium", seasonality: "Year-round", dataSource: 'Estimate' };
   }
   
   return { 
