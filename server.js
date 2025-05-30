@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://claude.ai', 'https://railway.app', 'https://*.railway.app'],
+  origin: ['http://localhost:3000', 'https://claude.ai', 'https://*.claude.ai', '*'],
   credentials: true
 }));
 
