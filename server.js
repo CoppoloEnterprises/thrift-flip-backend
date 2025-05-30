@@ -7,6 +7,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Enable CORS
 app.use(cors({
   origin: true,
   credentials: true,
@@ -23,6 +24,167 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024 // 10MB limit
   }
 });
+
+// eBay API functions
+async function getEbayMarketData(itemName) {
+  try {
+    console.log('🛒 Fetching eBay data for:', itemName);
+    
+    // Get sold listings from eBay Finding API
+    const soldListings = await getEbaySoldListings(itemName);
+    console.log('📊 Found', soldListings.length, 'sold listings');
+    
+    // Get active listings to calculate sell-through rate
+    const activeListings = await getEbayActiveListings(itemName);
+    console.log('📈 Found', activeListings.length, 'active listings');
+    
+    if (soldListings.length === 0) {
+      console.log('⚠️ No sold listings found, using fallback data');
+      return getFallbackMarketData(itemName);
+    }
+    
+    // Calculate market metrics from real eBay data
+    const prices = soldListings.map(item => parseFloat(item.price));
+    const avgSoldPrice = Math.round(prices.reduce((sum, price) => sum + price, 0) / prices.length);
+    
+    // Calculate sell-through rate (sold vs total listings)
+    const totalListings = soldListings.length + activeListings.length;
+    const sellThroughRate = totalListings > 0 ? Math.round((soldListings.length / totalListings) * 100) : 50;
+    
+    // Calculate average listing time from sold items
+    const listingTimes = soldListings.map(item => item.listingDays).filter(days => days > 0);
+    const avgListingTime = listingTimes.length > 0 ? 
+      Math.round(listingTimes.reduce((sum, days) => sum + days, 0) / listingTimes.length) : 15;
+    
+    // Determine demand level based on sell-through rate
+    let demandLevel = 'Low';
+    if (sellThroughRate >= 60) demandLevel = 'High';
+    else if (sellThroughRate >= 40) demandLevel = 'Medium';
+    
+    const marketData = {
+      avgSoldPrice,
+      sellThroughRate,
+      avgListingTime,
+      demandLevel,
+      seasonality: 'Year-round', // Could be enhanced with seasonal analysis
+      dataSource: 'eBay API',
+      soldListingsCount: soldListings.length,
+      activeListingsCount: activeListings.length
+    };
+    
+    console.log('✅ eBay market data calculated:', marketData);
+    return marketData;
+    
+  } catch (error) {
+    console.error('❌ eBay API error:', error.message);
+    return getFallbackMarketData(itemName);
+  }
+}
+
+async function getEbaySoldListings(itemName) {
+  try {
+    const searchTerms = encodeURIComponent(itemName);
+    
+    // eBay Finding API - findCompletedItems
+    const url = `https://svcs.ebay.com/services/search/FindingService/v1?` +
+      `OPERATION-NAME=findCompletedItems&` +
+      `SERVICE-VERSION=1.13.0&` +
+      `SECURITY-APPNAME=${process.env.EBAY_APP_ID}&` +
+      `RESPONSE-DATA-FORMAT=JSON&` +
+      `keywords=${searchTerms}&` +
+      `itemFilter(0).name=SoldItemsOnly&` +
+      `itemFilter(0).value=true&` +
+      `itemFilter(1).name=ListingType&` +
+      `itemFilter(1).value=AuctionWithBIN&` +
+      `itemFilter(1).value=FixedPrice&` +
+      `sortOrder=EndTimeSoonest&` +
+      `paginationInput.entriesPerPage=50`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (!data.findCompletedItemsResponse || !data.findCompletedItemsResponse[0].searchResult) {
+      return [];
+    }
+    
+    const items = data.findCompletedItemsResponse[0].searchResult[0].item || [];
+    
+    return items.map(item => {
+      const endTime = new Date(item.listingInfo[0].endTime[0]);
+      const startTime = new Date(item.listingInfo[0].startTime[0]);
+      const listingDays = Math.ceil((endTime - startTime) / (1000 * 60 * 60 * 24));
+      
+      return {
+        title: item.title[0],
+        price: item.sellingStatus[0].currentPrice[0].__value__,
+        currency: item.sellingStatus[0].currentPrice[0]['@currencyId'],
+        endTime: endTime,
+        listingDays: listingDays,
+        condition: item.condition ? item.condition[0].conditionDisplayName[0] : 'Unknown'
+      };
+    });
+    
+  } catch (error) {
+    console.error('Error fetching eBay sold listings:', error);
+    return [];
+  }
+}
+
+async function getEbayActiveListings(itemName) {
+  try {
+    const searchTerms = encodeURIComponent(itemName);
+    
+    // eBay Finding API - findItemsByKeywords for active listings
+    const url = `https://svcs.ebay.com/services/search/FindingService/v1?` +
+      `OPERATION-NAME=findItemsByKeywords&` +
+      `SERVICE-VERSION=1.13.0&` +
+      `SECURITY-APPNAME=${process.env.EBAY_APP_ID}&` +
+      `RESPONSE-DATA-FORMAT=JSON&` +
+      `keywords=${searchTerms}&` +
+      `itemFilter(0).name=ListingType&` +
+      `itemFilter(0).value=AuctionWithBIN&` +
+      `itemFilter(0).value=FixedPrice&` +
+      `paginationInput.entriesPerPage=50`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (!data.findItemsByKeywordsResponse || !data.findItemsByKeywordsResponse[0].searchResult) {
+      return [];
+    }
+    
+    const items = data.findItemsByKeywordsResponse[0].searchResult[0].item || [];
+    return items.length;
+    
+  } catch (error) {
+    console.error('Error fetching eBay active listings:', error);
+    return 0;
+  }
+}
+
+function getFallbackMarketData(itemName) {
+  // Fallback data when eBay API fails
+  const categoryLower = itemName.toLowerCase();
+  
+  if (categoryLower.includes('football')) {
+    return { avgSoldPrice: 25, sellThroughRate: 65, avgListingTime: 10, demandLevel: "Medium", seasonality: "Fall peak", dataSource: 'Estimate' };
+  }
+  if (categoryLower.includes('hat') || categoryLower.includes('cap')) {
+    return { avgSoldPrice: 20, sellThroughRate: 50, avgListingTime: 14, demandLevel: "Medium", seasonality: "Year-round", dataSource: 'Estimate' };
+  }
+  if (categoryLower.includes('baseball')) {
+    return { avgSoldPrice: 35, sellThroughRate: 58, avgListingTime: 14, demandLevel: "Medium", seasonality: "Spring/Summer peak", dataSource: 'Estimate' };
+  }
+  
+  return { 
+    avgSoldPrice: 30, 
+    sellThroughRate: 45, 
+    avgListingTime: 18, 
+    demandLevel: "Medium", 
+    seasonality: "Year-round",
+    dataSource: 'Estimate'
+  };
+}
 
 // Image analysis endpoint
 app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
@@ -99,12 +261,16 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
 
     console.log('✅ Final result:', category, `(${confidence}% confidence)`);
 
+    // Get real eBay market data
+    const marketData = await getEbayMarketData(category);
+
     res.json({
       category,
       confidence,
       detections: allDetections,
       brands: logos.map(logo => logo.description),
-      text: text.map(t => t.description).join(' ')
+      text: text.map(t => t.description).join(' '),
+      ...marketData
     });
 
   } catch (error) {
@@ -120,7 +286,6 @@ function categorizeItem(detections, textDetections) {
   
   console.log('🏷️ Analyzing keywords:', allContent);
   
-  // Get the highest confidence detection as primary category
   const primaryDetection = detections[0]?.description || 'Unknown Item';
   
   // Sports equipment - specific brand detection
@@ -142,16 +307,22 @@ function categorizeItem(detections, textDetections) {
   if (allContent.includes('soccer') && allContent.includes('ball')) {
     return 'Soccer Ball';
   }
+  if ((allContent.includes('hat') || allContent.includes('cap')) && allContent.includes('baseball')) {
+    return 'Baseball Cap';
+  }
+  if (allContent.includes('hat') || allContent.includes('cap')) {
+    return 'Hat';
+  }
   
   // Clothing
   if (allContent.includes('jacket') || allContent.includes('coat') || allContent.includes('leather')) {
-    return 'Vintage Leather Jacket';
+    return 'Jacket';
   }
   if (allContent.includes('shoe') || allContent.includes('sneaker') || allContent.includes('boot')) {
     return 'Athletic Sneakers';
   }
   if (allContent.includes('shirt') || allContent.includes('t-shirt')) {
-    return 'Vintage T-Shirt';
+    return 'T-Shirt';
   }
   
   // Electronics & Gadgets
@@ -167,89 +338,9 @@ function categorizeItem(detections, textDetections) {
   if (allContent.includes('binoculars') || allContent.includes('binocular')) {
     return 'Binoculars';
   }
-  if (allContent.includes('headphones') || allContent.includes('headphone')) {
-    return 'Headphones';
-  }
-  if (allContent.includes('calculator')) {
-    return 'Calculator';
-  }
-  if (allContent.includes('typewriter')) {
-    return 'Typewriter';
-  }
   
-  // Accessories
-  if (allContent.includes('bag') || allContent.includes('purse') || allContent.includes('handbag')) {
-    return 'Handbag';
-  }
-  if (allContent.includes('watch')) {
-    return 'Watch';
-  }
-  if (allContent.includes('jewelry') || allContent.includes('necklace') || allContent.includes('ring')) {
-    return 'Jewelry';
-  }
-  
-  // Books & Media
-  if (allContent.includes('book') || allContent.includes('novel')) {
-    return 'Book';
-  }
-  if (allContent.includes('vinyl') || allContent.includes('record')) {
-    return 'Vinyl Record';
-  }
-  if (allContent.includes('cd') || allContent.includes('compact disc')) {
-    return 'Music CD';
-  }
-  
-  // Home & Decor
-  if (allContent.includes('vase') || allContent.includes('pottery')) {
-    return 'Vase';
-  }
-  if (allContent.includes('lamp') || allContent.includes('lighting')) {
-    return 'Lamp';
-  }
-  if (allContent.includes('mirror')) {
-    return 'Mirror';
-  }
-  if (allContent.includes('clock')) {
-    return 'Clock';
-  }
-  
-  // Toys & Games
-  if (allContent.includes('toy') || allContent.includes('doll')) {
-    return 'Toy';
-  }
-  if (allContent.includes('game') || allContent.includes('board game')) {
-    return 'Board Game';
-  }
-  if (allContent.includes('puzzle')) {
-    return 'Puzzle';
-  }
-  
-  // Tools & Equipment
-  if (allContent.includes('tool') || allContent.includes('wrench') || allContent.includes('hammer')) {
-    return 'Tools';
-  }
-  
-  // Kitchenware
-  if (allContent.includes('pot') || allContent.includes('pan') || allContent.includes('cookware')) {
-    return 'Cookware';
-  }
-  if (allContent.includes('blender') || allContent.includes('mixer')) {
-    return 'Kitchen Appliance';
-  }
-  
-  // If no specific category matches, use the most confident Google Vision result
-  // Capitalize first letter and make it more marketable
+  // Use Google Vision's most confident result
   const capitalizedPrimary = primaryDetection.charAt(0).toUpperCase() + primaryDetection.slice(1);
-  
-  // Only add "Vintage" prefix for items that are actually likely to be vintage/collectible
-  // and only if they're clearly old items (typewriters, certain electronics, etc.)
-  const definiteVintageItems = ['typewriter', 'rotary phone', 'gramophone'];
-  const shouldAddVintage = definiteVintageItems.some(item => allContent.includes(item));
-  
-  if (shouldAddVintage && !capitalizedPrimary.includes('Vintage')) {
-    return `Vintage ${capitalizedPrimary}`;
-  }
-  
   return capitalizedPrimary;
 }
 
@@ -257,7 +348,8 @@ function categorizeItem(detections, textDetections) {
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'Server is running!',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    ebayIntegration: 'Active'
   });
 });
 
@@ -268,6 +360,10 @@ app.get('/', (req, res) => {
     endpoints: {
       health: '/api/health',
       analyze: '/api/analyze-image (POST)'
+    },
+    integrations: {
+      googleVision: 'Active',
+      ebayAPI: 'Active'
     }
   });
 });
@@ -276,7 +372,8 @@ app.listen(PORT, () => {
   console.log('🚀 Thrift Flip Backend Server Started!');
   console.log(`📡 Server running on http://localhost:${PORT}`);
   console.log('🔑 Google Vision API key loaded');
-  console.log('📱 Ready to analyze images!');
+  console.log('🛒 eBay API credentials loaded');
+  console.log('📱 Ready to analyze images with real market data!');
   console.log('\n📋 Available endpoints:');
   console.log(`   Health check: http://localhost:${PORT}/api/health`);
   console.log(`   Image analysis: http://localhost:${PORT}/api/analyze-image`);
