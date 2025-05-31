@@ -88,6 +88,19 @@ async function getEbayAccessToken() {
   }
 }
 
+// Add this debug endpoint to your server.js
+app.get('/api/debug-raw-env', (req, res) => {
+  res.json({
+    rawClientId: JSON.stringify(process.env.EBAY_CLIENT_ID),
+    rawClientSecret: JSON.stringify(process.env.EBAY_CLIENT_SECRET),
+    clientIdLength: process.env.EBAY_CLIENT_ID?.length,
+    clientIdFirstChar: process.env.EBAY_CLIENT_ID?.charCodeAt(0),
+    clientIdActual: process.env.EBAY_CLIENT_ID,
+    hasEquals: process.env.EBAY_CLIENT_ID?.includes('='),
+    clientIdBytes: Array.from(process.env.EBAY_CLIENT_ID || '').map(c => c.charCodeAt(0)).slice(0, 10)
+  });
+});
+
 // Search eBay for sold listings
 async function searchEbaySoldListings(searchQuery, maxResults = 200) {
   try {
@@ -318,9 +331,9 @@ async function getEbayAccessToken() {
 
     console.log('🔑 Getting new eBay access token...');
     
-    // For the OAuth API, eBay expects the App ID and Cert ID in this exact format
-    const clientId = process.env.EBAY_CLIENT_ID;  // Your App ID
-    const clientSecret = process.env.EBAY_CLIENT_SECRET;  // Your Cert ID
+    // In getEbayAccessToken(), change these lines:
+const clientId = process.env.EBAY_CLIENT_ID?.trim();
+const clientSecret = process.env.EBAY_CLIENT_SECRET?.trim();
     
     console.log('Using Client ID:', clientId ? clientId.substring(0, 20) + '...' : 'Missing');
     console.log('Using Client Secret:', clientSecret ? clientSecret.substring(0, 10) + '...' : 'Missing');
