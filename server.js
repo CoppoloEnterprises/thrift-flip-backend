@@ -769,6 +769,88 @@ app.get('/api/debug-ebay', async (req, res) => {
   }
 });
 
+// Debug endpoint to check environment variables
+app.get('/api/debug-env', (req, res) => {
+  res.json({
+    nodeEnv: process.env.NODE_ENV,
+    port: process.env.PORT,
+    hasGoogleVision: !!process.env.GOOGLE_VISION_API_KEY,
+    hasEbayClientId: !!process.env.EBAY_CLIENT_ID,
+    hasEbayClientSecret: !!process.env.EBAY_CLIENT_SECRET,
+    ebayClientIdLength: process.env.EBAY_CLIENT_ID ? process.env.EBAY_CLIENT_ID.length : 0,
+    ebayClientSecretLength: process.env.EBAY_CLIENT_SECRET ? process.env.EBAY_CLIENT_SECRET.length : 0,
+    allEnvKeys: Object.keys(process.env).filter(key => 
+      key.includes('EBAY') || key.includes('GOOGLE') || key.includes('PORT')
+    )
+  });
+});
+
+// Debug endpoint to test eBay credentials
+app.get('/api/debug-ebay', async (req, res) => {
+  try {
+    console.log('🔍 Debug: Testing eBay credentials...');
+    console.log('EBAY_CLIENT_ID:', process.env.EBAY_CLIENT_ID ? 'Set (length: ' + process.env.EBAY_CLIENT_ID.length + ')' : 'Not set');
+    console.log('EBAY_CLIENT_SECRET:', process.env.EBAY_CLIENT_SECRET ? 'Set (length: ' + process.env.EBAY_CLIENT_SECRET.length + ')' : 'Not set');
+    
+    if (!process.env.EBAY_CLIENT_ID || !process.env.EBAY_CLIENT_SECRET) {
+      return res.json({
+        success: false,
+        error: 'eBay credentials not set in environment variables',
+        clientId: process.env.EBAY_CLIENT_ID ? 'Set' : 'Missing',
+        clientSecret: process.env.EBAY_CLIENT_SECRET ? 'Set' : 'Missing'
+      });
+    }
+    
+    // Test the credentials format
+    const credentials = Buffer.from(`${process.env.EBAY_CLIENT_ID}:${process.env.EBAY_CLIENT_SECRET}`).toString('base64');
+    console.log('Credentials base64 (first 50 chars):', credentials.substring(0, 50));
+    
+    // Try to get token
+    const tokenUrl = 'https://api.ebay.com/identity/v1/oauth2/token';
+    
+    console.log('Making request to:', tokenUrl);
+    
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${credentials}`
+      },
+      body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope'
+    });
+    
+    const responseText = await response.text();
+    console.log('eBay response status:', response.status);
+    console.log('eBay response:', responseText);
+    
+    if (response.ok) {
+      const tokenData = JSON.parse(responseText);
+      res.json({
+        success: true,
+        message: 'eBay credentials are working!',
+        hasToken: !!tokenData.access_token,
+        expiresIn: tokenData.expires_in
+      });
+    } else {
+      res.json({
+        success: false,
+        error: 'eBay authentication failed',
+        status: response.status,
+        response: responseText,
+        clientIdFormat: process.env.EBAY_CLIENT_ID?.startsWith('Christop-') ? 'Correct format' : 'Wrong format',
+        clientSecretFormat: process.env.EBAY_CLIENT_SECRET?.startsWith('PRD-') ? 'Correct format' : 'Wrong format'
+      });
+    }
+    
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log('🚀 Thrift Flip Backend Server v4.0 Started!');
   console.log(`📡 Server running on http://localhost:${PORT}`);
