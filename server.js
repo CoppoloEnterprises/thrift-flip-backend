@@ -51,7 +51,7 @@ async function getEbayMarketData(category) {
 
     // Search for completed listings
     const searchQuery = encodeURIComponent(category);
-    const searchUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${searchQuery}&filter=conditionIds:{3000|4000|5000}&sort=price&limit=50`;
+    const searchUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${searchQuery}&filter=conditionIds:{3000|4000|5000}&filter=buyingOptions:{FIXED_PRICE}&sort=price&limit=50`;
 
     const searchResponse = await fetch(searchUrl, {
       headers: {
@@ -74,14 +74,20 @@ async function getEbayMarketData(category) {
     // Process eBay data
     const items = searchData.itemSummaries;
     const prices = items
-      .filter(item => item.price && item.price.value)
+      .filter(item => item.price && item.price.value && parseFloat(item.price.value) > 5) // Filter out items under $5
       .map(item => parseFloat(item.price.value));
 
     if (prices.length === 0) {
+      console.log('📊 No valid eBay prices found, using fallback data');
       return getFallbackMarketData(category);
     }
 
-    const avgPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
+    // Remove outliers (prices more than 3 standard deviations from mean)
+    const mean = prices.reduce((a, b) => a + b, 0) / prices.length;
+    const stdDev = Math.sqrt(prices.map(p => Math.pow(p - mean, 2)).reduce((a, b) => a + b, 0) / prices.length);
+    const filteredPrices = prices.filter(p => Math.abs(p - mean) <= 2 * stdDev);
+
+    const avgPrice = Math.round(filteredPrices.reduce((a, b) => a + b, 0) / filteredPrices.length);
     const sellThroughRate = Math.min(95, Math.max(45, 60 + Math.random() * 25)); // Estimate based on category
     const avgListingTime = Math.max(3, Math.round(15 - (sellThroughRate - 50) / 5)); // Higher sell-through = faster sales
     
@@ -138,6 +144,9 @@ function getFallbackMarketData(category) {
     'iphone': { avgSoldPrice: 245, sellThroughRate: 85, avgListingTime: 4, demandLevel: "Very High", seasonality: "Year-round" },
     'ipad': { avgSoldPrice: 185, sellThroughRate: 78, avgListingTime: 6, demandLevel: "High", seasonality: "Back-to-school peak" },
     'smartphone': { avgSoldPrice: 95, sellThroughRate: 52, avgListingTime: 18, demandLevel: "Medium", seasonality: "Holiday peak" },
+    'audio interface': { avgSoldPrice: 125, sellThroughRate: 68, avgListingTime: 12, demandLevel: "High", seasonality: "Year-round" },
+    'audio equipment': { avgSoldPrice: 85, sellThroughRate: 62, avgListingTime: 14, demandLevel: "Medium", seasonality: "Year-round" },
+    'focusrite': { avgSoldPrice: 135, sellThroughRate: 72, avgListingTime: 10, demandLevel: "High", seasonality: "Year-round" },
     'electronics': { avgSoldPrice: 75, sellThroughRate: 48, avgListingTime: 20, demandLevel: "Medium", seasonality: "Holiday peak" },
     
     // Clothing Brands
@@ -167,6 +176,9 @@ function getFallbackMarketData(category) {
   }
   if (categoryLower.includes('electronic') || categoryLower.includes('phone') || categoryLower.includes('camera')) {
     return { avgSoldPrice: 95, sellThroughRate: 52, avgListingTime: 18, demandLevel: "Medium", seasonality: "Holiday peak", source: 'Fallback Data' };
+  }
+  if (categoryLower.includes('audio') || categoryLower.includes('interface') || categoryLower.includes('focusrite')) {
+    return { avgSoldPrice: 125, sellThroughRate: 68, avgListingTime: 12, demandLevel: "High", seasonality: "Year-round", source: 'Fallback Data' };
   }
   if (categoryLower.includes('vintage') || categoryLower.includes('leather')) {
     return { avgSoldPrice: 65, sellThroughRate: 48, avgListingTime: 22, demandLevel: "Medium", seasonality: "Fall/Winter peak", source: 'Fallback Data' };
@@ -356,6 +368,9 @@ function categorizeItem(detections, textDetections) {
   if (allContent.includes('camera')) {
     return 'Camera';
   }
+  if (allContent.includes('audio interface') || allContent.includes('scarlett') || allContent.includes('focusrite')) {
+    return 'Audio Interface';
+  }
   if (allContent.includes('radio') || allContent.includes('stereo')) {
     return 'Electronics';
   }
@@ -370,6 +385,9 @@ function categorizeItem(detections, textDetections) {
   }
   if (allContent.includes('typewriter')) {
     return 'Typewriter';
+  }
+  if (allContent.includes('usb') && (allContent.includes('audio') || allContent.includes('interface') || allContent.includes('recording'))) {
+    return 'Audio Equipment';
   }
   
   // Accessories
