@@ -307,51 +307,113 @@ function processEbayListings(listings, category) {
   };
 }
 
-// Get comprehensive market data from eBay
-async function getEbayMarketData(category, brands = []) {
+// Replace the getEbayAccessToken function in your server.js with this fixed version
+
+async function getEbayAccessToken() {
   try {
-    console.log('💰 Getting real eBay market data for:', category);
+    // Check if we have a valid cached token
+    if (ebayAccessToken && tokenExpiry && Date.now() < tokenExpiry) {
+      return ebayAccessToken;
+    }
+
+    console.log('🔑 Getting new eBay access token...');
     
-    // Build multiple search queries for better results
-    const searchQueries = buildEbaySearchQueries(category, brands);
+    // For the OAuth API, eBay expects the App ID and Cert ID in this exact format
+    const clientId = process.env.EBAY_CLIENT_ID;  // Your App ID
+    const clientSecret = process.env.EBAY_CLIENT_SECRET;  // Your Cert ID
     
-    let allListings = [];
-    let searchAttempts = 0;
+    console.log('Using Client ID:', clientId ? clientId.substring(0, 20) + '...' : 'Missing');
+    console.log('Using Client Secret:', clientSecret ? clientSecret.substring(0, 10) + '...' : 'Missing');
     
-    // Try each search query until we get good results
-    for (const query of searchQueries) {
-      searchAttempts++;
-      console.log(`🔍 eBay search attempt ${searchAttempts}: "${query}"`);
+    const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    
+    // Try production endpoint first
+    const tokenUrl = 'https://api.ebay.com/identity/v1/oauth2/token';
+    
+    console.log('Making OAuth request to:', tokenUrl);
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${credentials}`,
+        'Accept': 'application/json'
+      },
+      body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope'
+    });
+
+    const responseText = await response.text();
+    console.log('eBay OAuth response status:', response.status);
+    console.log('eBay OAuth response:', responseText);
+
+    if (!response.ok) {
+      // If production fails, try with a different scope
+      console.log('🔄 Trying with browse scope...');
       
-      try {
-        const searchResults = await searchEbaySoldListings(query, 100);
+      const response2 = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${credentials}`,
+          'Accept': 'application/json'
+        },
+        body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope/buy.browse'
+      });
+      
+      const responseText2 = await response2.text();
+      console.log('eBay OAuth response2 status:', response2.status);
+      console.log('eBay OAuth response2:', responseText2);
+      
+      if (!response2.ok) {
+        // Try sandbox if production fails
+        console.log('🔄 Trying sandbox environment...');
         
-        if (searchResults && searchResults.itemSummaries.length > 0) {
-          allListings = searchResults.itemSummaries;
-          console.log(`✅ Good results from query: "${query}" (${allListings.length} items)`);
-          break;
+        const sandboxUrl = 'https://api.sandbox.ebay.com/identity/v1/oauth2/token';
+        const response3 = await fetch(sandboxUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': `Basic ${credentials}`,
+            'Accept': 'application/json'
+          },
+          body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope'
+        });
+        
+        const responseText3 = await response3.text();
+        console.log('eBay Sandbox response status:', response3.status);
+        console.log('eBay Sandbox response:', responseText3);
+        
+        if (!response3.ok) {
+          throw new Error(`All eBay OAuth attempts failed. Last error: ${response3.status} - ${responseText3}`);
         }
-      } catch (error) {
-        console.log(`⚠️ Query failed: "${query}" - ${error.message}`);
-        continue;
+        
+        const tokenData3 = JSON.parse(responseText3);
+        ebayAccessToken = tokenData3.access_token;
+        tokenExpiry = Date.now() + (tokenData3.expires_in * 1000) - 60000;
+        
+        // Update config to use sandbox
+        EBAY_CONFIG.SANDBOX = true;
+        console.log('✅ eBay sandbox access token obtained');
+        return ebayAccessToken;
       }
       
-      // Don't try more than 3 queries to avoid rate limits
-      if (searchAttempts >= 3) break;
+      const tokenData2 = JSON.parse(responseText2);
+      ebayAccessToken = tokenData2.access_token;
+      tokenExpiry = Date.now() + (tokenData2.expires_in * 1000) - 60000;
+      console.log('✅ eBay access token obtained with browse scope');
+      return ebayAccessToken;
     }
+
+    const tokenData = JSON.parse(responseText);
     
-    if (allListings.length === 0) {
-      throw new Error('No eBay data found for any search query');
-    }
+    ebayAccessToken = tokenData.access_token;
+    tokenExpiry = Date.now() + (tokenData.expires_in * 1000) - 60000;
     
-    // Process the eBay data to get market metrics
-    const marketData = processEbayListings(allListings, category);
-    
-    console.log('📊 Processed eBay market data:', marketData);
-    return marketData;
+    console.log('✅ eBay access token obtained');
+    return ebayAccessToken;
 
   } catch (error) {
-    console.error('❌ eBay market data failed:', error.message);
+    console.error('❌ Failed to get eBay access token:', error.message);
     throw error;
   }
 }
@@ -701,62 +763,33 @@ app.get('/', (req, res) => {
   });
 });
 
-// Add this debug endpoint to your server.js (before app.listen)
-
-// Debug endpoint to test eBay credentials
-app.get('/api/debug-ebay', async (req, res) => {
+// Also update your debug endpoint to test the new authentication:
+app.get('/api/debug-ebay-v2', async (req, res) => {
   try {
-    console.log('🔍 Debug: Testing eBay credentials...');
-    console.log('EBAY_CLIENT_ID:', process.env.EBAY_CLIENT_ID ? 'Set (length: ' + process.env.EBAY_CLIENT_ID.length + ')' : 'Not set');
-    console.log('EBAY_CLIENT_SECRET:', process.env.EBAY_CLIENT_SECRET ? 'Set (length: ' + process.env.EBAY_CLIENT_SECRET.length + ')' : 'Not set');
+    console.log('🔍 Debug: Testing eBay credentials v2...');
     
     if (!process.env.EBAY_CLIENT_ID || !process.env.EBAY_CLIENT_SECRET) {
       return res.json({
         success: false,
-        error: 'eBay credentials not set in environment variables',
-        clientId: process.env.EBAY_CLIENT_ID ? 'Set' : 'Missing',
-        clientSecret: process.env.EBAY_CLIENT_SECRET ? 'Set' : 'Missing'
+        error: 'eBay credentials not set in environment variables'
       });
     }
     
-    // Test the credentials format
-    const credentials = Buffer.from(`${process.env.EBAY_CLIENT_ID}:${process.env.EBAY_CLIENT_SECRET}`).toString('base64');
-    console.log('Credentials base64 (first 50 chars):', credentials.substring(0, 50));
+    // Test getting an access token with the new method
+    const accessToken = await getEbayAccessToken();
     
-    // Try to get token
-    const tokenUrl = 'https://api.ebay.com/identity/v1/oauth2/token';
-    
-    console.log('Making request to:', tokenUrl);
-    
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${credentials}`
-      },
-      body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope'
-    });
-    
-    const responseText = await response.text();
-    console.log('eBay response status:', response.status);
-    console.log('eBay response:', responseText);
-    
-    if (response.ok) {
-      const tokenData = JSON.parse(responseText);
+    if (accessToken) {
       res.json({
         success: true,
         message: 'eBay credentials are working!',
-        hasToken: !!tokenData.access_token,
-        expiresIn: tokenData.expires_in
+        hasToken: true,
+        tokenLength: accessToken.length,
+        sandbox: EBAY_CONFIG.SANDBOX
       });
     } else {
       res.json({
         success: false,
-        error: 'eBay authentication failed',
-        status: response.status,
-        response: responseText,
-        clientIdFormat: process.env.EBAY_CLIENT_ID?.startsWith('Christop-') ? 'Correct format' : 'Wrong format',
-        clientSecretFormat: process.env.EBAY_CLIENT_SECRET?.startsWith('PRD-') ? 'Correct format' : 'Wrong format'
+        error: 'Failed to get access token'
       });
     }
     
@@ -764,11 +797,11 @@ app.get('/api/debug-ebay', async (req, res) => {
     console.error('Debug error:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      details: 'Check server logs for more information'
     });
   }
 });
-
 // Debug endpoint to check environment variables
 app.get('/api/debug-env', (req, res) => {
   res.json({
