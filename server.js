@@ -607,15 +607,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
   }
 });
 
-function categorizeItem(detections, textDetections, logos = []) {
-  const keywords = detections.map(d => d.description.toLowerCase()).join(' ');
-  const textContent = textDetections.map(t => t.description.toLowerCase()).join(' ');
-  const logoText = logos.map(l => l.description.toLowerCase()).join(' ');
-  const allContent = (keywords + ' ' + textContent + ' ' + logoText).toLowerCase();
-  
-  console.log('🏷️ Analyzing keywords:', allContent.substring(0, 200));
-
-  // Make sure this function exists in your server.js
+// Make sure this function exists in your server.js
 async function getMarketDataWithFallback(category, brands = []) {
   console.log('🎯 Getting market data for:', category);
   
@@ -634,6 +626,13 @@ async function getMarketDataWithFallback(category, brands = []) {
   console.log('📚 Using accurate static data as fallback');
   return getAccurateStaticData(category, brands);
 }
+function categorizeItem(detections, textDetections, logos = []) {
+  const keywords = detections.map(d => d.description.toLowerCase()).join(' ');
+  const textContent = textDetections.map(t => t.description.toLowerCase()).join(' ');
+  const logoText = logos.map(l => l.description.toLowerCase()).join(' ');
+  const allContent = (keywords + ' ' + textContent + ' ' + logoText).toLowerCase();
+  
+  console.log('🏷️ Analyzing keywords:', allContent.substring(0, 200));
   
   // Get the highest confidence detection
   const primaryDetection = detections[0]?.description || 'Unknown Item';
