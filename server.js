@@ -15,7 +15,7 @@ app.use(cors({
     'https://*.railway.app', 
     'https://*.github.io', 
     'https://*.netlify.app',
-    'https://thrift-flipper-app.netlify.app'  // Add your specific Netlify URL
+    'https://thrift-flipper-app.netlify.app'
   ],
   credentials: true
 }));
@@ -43,7 +43,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     const base64Image = req.file.buffer.toString('base64');
     console.log('🔄 Converting image and calling Google Vision API...');
 
-    // Call Google Vision API
+    // Enhanced Google Vision API request
     const visionRequest = {
       requests: [
         {
@@ -51,11 +51,11 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
             content: base64Image
           },
           features: [
-            { type: 'OBJECT_LOCALIZATION', maxResults: 15 },
-            { type: 'LABEL_DETECTION', maxResults: 15 },
+            { type: 'OBJECT_LOCALIZATION', maxResults: 20 },
+            { type: 'LABEL_DETECTION', maxResults: 20 },
             { type: 'TEXT_DETECTION', maxResults: 10 },
             { type: 'LOGO_DETECTION', maxResults: 10 },
-            { type: 'PRODUCT_SEARCH', maxResults: 5 }
+            { type: 'WEB_DETECTION', maxResults: 10 } // Added for better context
           ]
         }
       ]
@@ -85,37 +85,44 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     const labels = annotations.labelAnnotations || [];
     const text = annotations.textAnnotations || [];
     const logos = annotations.logoAnnotations || [];
+    const webDetection = annotations.webDetection || {};
 
     console.log('🔍 Google Vision detected:');
-    console.log('Objects:', objects.map(o => `${o.name} (${Math.round(o.score * 100)}%)`));
-    console.log('Labels:', labels.map(l => `${l.description} (${Math.round(l.score * 100)}%)`));
+    console.log('Objects:', objects.slice(0, 5).map(o => `${o.name} (${Math.round(o.score * 100)}%)`));
+    console.log('Labels:', labels.slice(0, 8).map(l => `${l.description} (${Math.round(l.score * 100)}%)`));
     console.log('Logos:', logos.map(l => `${l.description} (${Math.round(l.score * 100)}%)`));
     if (text.length > 0) {
       console.log('Text detected:', text[0].description.substring(0, 100));
     }
+    if (webDetection.webEntities) {
+      console.log('Web entities:', webDetection.webEntities.slice(0, 3).map(e => e.description));
+    }
 
-    // Combine all detections
+    // Combine all detections with proper weighting
     const allDetections = [
-      ...objects.map(obj => ({ type: 'object', description: obj.name, score: obj.score })),
+      ...objects.map(obj => ({ type: 'object', description: obj.name, score: obj.score * 1.2 })), // Boost objects
       ...labels.map(label => ({ type: 'label', description: label.description, score: label.score })),
-      ...logos.map(logo => ({ type: 'logo', description: logo.description, score: logo.score * 1.2 })) // Boost logo confidence
+      ...logos.map(logo => ({ type: 'logo', description: logo.description, score: logo.score * 1.5 })), // Boost logos
+      ...(webDetection.webEntities || []).map(entity => ({ type: 'web', description: entity.description, score: (entity.score || 0.5) * 0.8 }))
     ];
 
     // Sort by score
     allDetections.sort((a, b) => b.score - a.score);
 
-    // Enhanced categorization
-    const category = categorizeItem(allDetections, text);
+    // Enhanced categorization with better context
+    const categoryResult = categorizeItem(allDetections, text, logos);
     const confidence = Math.round((allDetections[0]?.score || 0) * 100);
 
-    console.log('✅ Final result:', category, `(${confidence}% confidence)`);
+    console.log('✅ Final result:', categoryResult.category, `(${confidence}% confidence)`);
 
     res.json({
-      category,
+      category: categoryResult.category,
       confidence,
-      detections: allDetections,
+      detections: allDetections.slice(0, 10), // Return top 10 detections
       brands: logos.map(logo => logo.description),
-      text: text.map(t => t.description).join(' ')
+      text: text.map(t => t.description).join(' '),
+      avgPrice: categoryResult.avgPrice || null,
+      notes: categoryResult.notes || null
     });
 
   } catch (error) {
@@ -124,52 +131,46 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
   }
 });
 
-function categorizeItem(detections, textDetections) {
+function categorizeItem(detections, textDetections, logos = []) {
   const keywords = detections.map(d => d.description.toLowerCase()).join(' ');
   const textContent = textDetections.map(t => t.description.toLowerCase()).join(' ');
-  const allContent = (keywords + ' ' + textContent).toLowerCase();
+  const logoText = logos.map(l => l.description.toLowerCase()).join(' ');
+  const allContent = (keywords + ' ' + textContent + ' ' + logoText).toLowerCase();
   
-  console.log('🏷️ Analyzing keywords:', allContent);
-  console.log('🔍 Top detections:', detections.slice(0, 3).map(d => `${d.description} (${Math.round(d.score * 100)}%)`));
+  console.log('🏷️ Analyzing keywords:', allContent.substring(0, 200));
+  console.log('🔍 Top detections:', detections.slice(0, 5).map(d => `${d.description} (${Math.round(d.score * 100)}%)`));
   
-  // Get the highest confidence detection as primary category
+  // Get the highest confidence detection
   const primaryDetection = detections[0]?.description || 'Unknown Item';
   const topScore = detections[0]?.score || 0;
   
-  // Enhanced brand and model detection
-  const brands = {
-    'nike': /nike|swoosh|air\s+jordan|jordan\s+\d+/i,
-    'adidas': /adidas|three\s+stripes|trefoil/i,
-    'wilson': /wilson/i,
+  // Enhanced brand detection
+  const brandPatterns = {
     'titleist': /titleist/i,
-    'footjoy': /footjoy|fj/i,
+    'nike': /nike|swoosh/i,
+    'adidas': /adidas|three\s+stripes/i,
     'callaway': /callaway/i,
-    'ping': /ping\s+golf|ping/i,
+    'ping': /ping/i,
     'taylormade': /taylormade|taylor\s+made/i,
-    'apple': /apple|iphone|ipad|macbook|airpods/i,
-    'samsung': /samsung|galaxy/i,
-    'canon': /canon/i,
-    'nikon': /nikon/i,
-    'sony': /sony/i,
-    'rolex': /rolex/i,
-    'omega': /omega/i,
-    'coach': /coach/i,
-    'louis vuitton': /louis\s+vuitton|lv\s+monogram/i,
-    'gucci': /gucci/i,
+    'footjoy': /footjoy|fj/i,
+    'under armour': /under\s+armour|underarmour/i,
     'polo ralph lauren': /polo\s+ralph\s+lauren|polo/i,
     'patagonia': /patagonia/i,
     'north face': /north\s+face|northface/i,
-    'levi': /levi|levis/i,
-    'carhartt': /carhartt/i,
-    'under armour': /under\s+armour|underarmour/i,
     'supreme': /supreme/i,
-    'off-white': /off-white|off\s+white/i,
-    'yeezy': /yeezy|kanye/i
+    'carhartt': /carhartt/i,
+    'levi': /levi|levis/i,
+    'apple': /apple|iphone|ipad|macbook/i,
+    'samsung': /samsung|galaxy/i,
+    'rolex': /rolex/i,
+    'omega': /omega/i,
+    'coach': /coach/i,
+    'louis vuitton': /louis\s+vuitton|lv/i,
+    'gucci': /gucci/i
   };
   
-  // Detect brands
   let detectedBrand = '';
-  for (const [brand, pattern] of Object.entries(brands)) {
+  for (const [brand, pattern] of Object.entries(brandPatterns)) {
     if (pattern.test(allContent)) {
       detectedBrand = brand;
       console.log(`🏷️ Detected brand: ${brand}`);
@@ -177,340 +178,306 @@ function categorizeItem(detections, textDetections) {
     }
   }
   
-  // Enhanced category detection with confidence scoring
+  // PRIORITY RULES - Most specific first
   const categoryRules = [
-    // High-Value Sneakers
+    // HATS & CAPS - Highest priority to avoid confusion with equipment
+    {
+      pattern: /(?:hat|cap|beanie|visor|headwear).*titleist|titleist.*(?:hat|cap|beanie|visor|headwear)/i,
+      category: 'Titleist Golf Hat',
+      confidence: 0.95,
+      avgPrice: 28,
+      notes: 'Popular golf brand hat'
+    },
+    {
+      pattern: /(?:hat|cap|beanie|visor).*(?:nike|adidas|under\s+armour)|(?:nike|adidas|under\s+armour).*(?:hat|cap|beanie|visor)/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Hat` : 'Athletic Hat',
+      confidence: 0.9,
+      avgPrice: 22
+    },
+    {
+      pattern: /baseball.*cap|snapback|fitted.*cap|trucker.*hat/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Baseball Cap` : 'Baseball Cap',
+      confidence: 0.85,
+      avgPrice: 18
+    },
+    {
+      pattern: /(?:hat|cap|beanie|visor|headwear)(?!.*(?:club|driver|iron|putter|bag))/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Hat` : 'Hat',
+      confidence: 0.8,
+      avgPrice: 15
+    },
+    
+    // GOLF EQUIPMENT - Only actual golf clubs and equipment
+    {
+      pattern: /golf.*(?:club|driver|iron|putter|wedge|wood|hybrid)|(?:driver|iron|putter|wedge).*golf/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Golf Club` : 'Golf Club',
+      confidence: 0.95,
+      avgPrice: 85
+    },
+    {
+      pattern: /golf.*(?:bag|cart)|(?:bag|cart).*golf/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Golf Bag` : 'Golf Bag',
+      confidence: 0.9,
+      avgPrice: 65
+    },
+    {
+      pattern: /golf.*ball/i,
+      category: 'Golf Balls',
+      confidence: 0.8,
+      avgPrice: 25
+    },
+    
+    // FOOTWEAR
     {
       pattern: /(air\s+jordan|jordan\s+\d+)/i,
       category: 'Air Jordan Sneakers',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 125
     },
     {
       pattern: /yeezy/i,
       category: 'Yeezy Sneakers',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 150
     },
     {
-      pattern: /(nike|swoosh).*(?:shoe|sneaker|trainer)/i,
+      pattern: /nike.*(?:shoe|sneaker|trainer)|(?:shoe|sneaker|trainer).*nike/i,
       category: 'Nike Sneakers',
-      confidence: 0.9
+      confidence: 0.9,
+      avgPrice: 75
     },
     {
-      pattern: /(adidas|three\s+stripes).*(?:shoe|sneaker|trainer)/i,
+      pattern: /adidas.*(?:shoe|sneaker|trainer)|(?:shoe|sneaker|trainer).*adidas/i,
       category: 'Adidas Sneakers',
-      confidence: 0.9
+      confidence: 0.9,
+      avgPrice: 65
+    },
+    {
+      pattern: /golf.*(?:shoe|cleat)|(?:shoe|cleat).*golf|footjoy/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Golf Shoes` : 'Golf Shoes',
+      confidence: 0.85,
+      avgPrice: 58
+    },
+    {
+      pattern: /(?:running|athletic|sports).*(?:shoe|sneaker)|(?:shoe|sneaker).*(?:running|athletic|sports)/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Athletic Shoes` : 'Athletic Shoes',
+      confidence: 0.8,
+      avgPrice: 55
+    },
+    {
+      pattern: /boot|hiking.*shoe|work.*shoe/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Boots` : 'Boots',
+      confidence: 0.75,
+      avgPrice: 65
+    },
+    {
+      pattern: /(?:shoe|sneaker|footwear)/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Shoes` : 'Shoes',
+      confidence: 0.7,
+      avgPrice: 45
     },
     
-    // Premium Golf Equipment
+    // ELECTRONICS
     {
-      pattern: /titleist.*(?:golf|club|ball)/i,
-      category: 'Titleist Golf Equipment',
-      confidence: 0.95
-    },
-    {
-      pattern: /callaway.*(?:golf|club|driver)/i,
-      category: 'Callaway Golf Equipment',
-      confidence: 0.95
-    },
-    {
-      pattern: /ping.*(?:golf|club|putter)/i,
-      category: 'Ping Golf Equipment',
-      confidence: 0.95
-    },
-    {
-      pattern: /taylormade.*(?:golf|club|driver)/i,
-      category: 'TaylorMade Golf Equipment',
-      confidence: 0.95
-    },
-    {
-      pattern: /golf.*(?:club|driver|iron|putter|wedge)/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Golf Equipment` : 'Golf Equipment',
-      confidence: 0.8
-    },
-    
-    // Electronics - High Value
-    {
-      pattern: /(iphone|apple.*phone)/i,
+      pattern: /iphone/i,
       category: 'iPhone',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 285
     },
     {
-      pattern: /(ipad|apple.*tablet)/i,
+      pattern: /ipad/i,
       category: 'iPad',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 225
     },
     {
-      pattern: /(macbook|apple.*laptop)/i,
+      pattern: /macbook/i,
       category: 'MacBook',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 485
     },
     {
       pattern: /airpods/i,
       category: 'AirPods',
-      confidence: 0.95
-    },
-    {
-      pattern: /(galaxy|samsung).*(?:phone|smartphone)/i,
-      category: 'Samsung Galaxy Phone',
-      confidence: 0.9
+      confidence: 0.95,
+      avgPrice: 95
     },
     {
       pattern: /smartphone|mobile.*phone|cell.*phone/i,
       category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Phone` : 'Smartphone',
-      confidence: 0.8
+      confidence: 0.8,
+      avgPrice: 145
     },
     {
-      pattern: /(dslr|mirrorless).*camera|camera.*(?:canon|nikon|sony)/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Camera` : 'DSLR Camera',
-      confidence: 0.85
-    },
-    {
-      pattern: /camera/i,
+      pattern: /camera|dslr/i,
       category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Camera` : 'Camera',
-      confidence: 0.8
+      confidence: 0.8,
+      avgPrice: 185
     },
     
-    // Sports Equipment
+    // SPORTS EQUIPMENT
     {
-      pattern: /(american\s+)?football.*wilson|wilson.*football/i,
+      pattern: /football.*wilson|wilson.*football/i,
       category: 'Wilson Football',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 32
     },
     {
-      pattern: /(american\s+)?football(?!.*soccer)/i,
+      pattern: /(?:american\s+)?football(?!.*soccer)/i,
       category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Football` : 'Football',
-      confidence: 0.8
+      confidence: 0.8,
+      avgPrice: 28
     },
     {
       pattern: /basketball/i,
       category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Basketball` : 'Basketball',
-      confidence: 0.8
-    },
-    {
-      pattern: /baseball.*(?:bat|glove)|softball/i,
-      category: 'Baseball Equipment',
-      confidence: 0.8
-    },
-    {
-      pattern: /soccer.*ball|football.*(?:round|soccer)/i,
-      category: 'Soccer Ball',
-      confidence: 0.8
-    },
-    {
-      pattern: /tennis.*(?:racket|racquet)/i,
-      category: 'Tennis Racket',
-      confidence: 0.8
+      confidence: 0.8,
+      avgPrice: 35
     },
     
-    // Designer Clothing
+    // CLOTHING
     {
       pattern: /supreme/i,
       category: 'Supreme Clothing',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 125
     },
     {
-      pattern: /off-white|off\s+white/i,
-      category: 'Off-White Clothing',
-      confidence: 0.95
+      pattern: /polo.*shirt|ralph.*lauren.*shirt/i,
+      category: 'Polo Ralph Lauren Shirt',
+      confidence: 0.9,
+      avgPrice: 42
     },
     {
-      pattern: /polo\s+ralph\s+lauren/i,
-      category: 'Polo Ralph Lauren',
-      confidence: 0.9
-    },
-    {
-      pattern: /patagonia/i,
+      pattern: /patagonia.*jacket/i,
       category: 'Patagonia Jacket',
-      confidence: 0.85
+      confidence: 0.85,
+      avgPrice: 85
     },
     {
-      pattern: /north\s+face/i,
+      pattern: /north\s+face.*jacket/i,
       category: 'North Face Jacket',
-      confidence: 0.85
+      confidence: 0.85,
+      avgPrice: 95
     },
     {
-      pattern: /(leather\s+)?jacket|coat/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Jacket` : 'Vintage Leather Jacket',
-      confidence: 0.7
-    },
-    {
-      pattern: /(?:running|athletic|sports)\s+(?:shoe|sneaker)/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Sneakers` : 'Athletic Sneakers',
-      confidence: 0.7
+      pattern: /(?:leather\s+)?jacket|coat/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Jacket` : 'Jacket',
+      confidence: 0.7,
+      avgPrice: 75
     },
     {
       pattern: /jeans|denim/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Jeans` : 'Designer Jeans',
-      confidence: 0.7
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Jeans` : 'Jeans',
+      confidence: 0.7,
+      avgPrice: 45
     },
     {
       pattern: /hoodie|sweatshirt/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Hoodie` : 'Branded Hoodie',
-      confidence: 0.7
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Hoodie` : 'Hoodie',
+      confidence: 0.7,
+      avgPrice: 42
     },
     {
       pattern: /(t-?shirt|tee)/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} T-Shirt` : 'Vintage T-Shirt',
-      confidence: 0.6
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} T-Shirt` : 'T-Shirt',
+      confidence: 0.6,
+      avgPrice: 28
     },
     
-    // Luxury Accessories
+    // ACCESSORIES
     {
       pattern: /rolex/i,
       category: 'Rolex Watch',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 3500
     },
     {
       pattern: /omega.*watch/i,
       category: 'Omega Watch',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 1800
     },
     {
-      pattern: /louis\s+vuitton|lv\s+monogram/i,
+      pattern: /watch|timepiece/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Watch` : 'Watch',
+      confidence: 0.8,
+      avgPrice: 95
+    },
+    {
+      pattern: /louis\s+vuitton|lv.*bag/i,
       category: 'Louis Vuitton Handbag',
-      confidence: 0.95
+      confidence: 0.95,
+      avgPrice: 485
     },
     {
-      pattern: /gucci/i,
-      category: 'Gucci Accessory',
-      confidence: 0.95
+      pattern: /gucci.*(?:bag|purse)/i,
+      category: 'Gucci Handbag',
+      confidence: 0.95,
+      avgPrice: 385
     },
     {
       pattern: /coach.*(?:bag|purse|handbag)/i,
       category: 'Coach Handbag',
-      confidence: 0.9
-    },
-    {
-      pattern: /watch|timepiece/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Watch` : 'Luxury Watch',
-      confidence: 0.8
+      confidence: 0.9,
+      avgPrice: 145
     },
     {
       pattern: /(?:hand)?bag|purse|tote|satchel/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Handbag` : 'Designer Handbag',
-      confidence: 0.75
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Handbag` : 'Handbag',
+      confidence: 0.75,
+      avgPrice: 45
     },
     {
       pattern: /backpack|rucksack/i,
       category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Backpack` : 'Backpack',
-      confidence: 0.7
+      confidence: 0.7,
+      avgPrice: 38
     },
     {
       pattern: /sunglasses/i,
-      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Sunglasses` : 'Designer Sunglasses',
-      confidence: 0.7
-    },
-    
-    // Collectibles
-    {
-      pattern: /vinyl|record|lp\s+/i,
-      category: 'Vintage Vinyl Record',
-      confidence: 0.8
-    },
-    {
-      pattern: /comic.*book/i,
-      category: 'Comic Book',
-      confidence: 0.8
-    },
-    {
-      pattern: /action.*figure|collectible.*figure/i,
-      category: 'Collectible Action Figure',
-      confidence: 0.8
-    },
-    {
-      pattern: /trading.*card|pokemon.*card|magic.*card/i,
-      category: 'Trading Cards',
-      confidence: 0.8
-    },
-    
-    // Tools & Equipment
-    {
-      pattern: /power.*tool|drill|saw/i,
-      category: 'Power Tools',
-      confidence: 0.8
-    },
-    {
-      pattern: /tool|wrench|hammer/i,
-      category: 'Hand Tools',
-      confidence: 0.7
-    },
-    
-    // Home & Kitchen
-    {
-      pattern: /(?:kitchen|stand).*mixer|kitchenaid/i,
-      category: 'Kitchen Mixer',
-      confidence: 0.8
-    },
-    {
-      pattern: /blender|food.*processor/i,
-      category: 'Kitchen Appliance',
-      confidence: 0.8
-    },
-    {
-      pattern: /cast.*iron|le.*creuset/i,
-      category: 'Cast Iron Cookware',
-      confidence: 0.8
-    },
-    
-    // Art & Decor
-    {
-      pattern: /pottery|ceramic|vase/i,
-      category: 'Vintage Pottery',
-      confidence: 0.7
-    },
-    {
-      pattern: /painting|artwork|print/i,
-      category: 'Artwork',
-      confidence: 0.7
-    },
-    {
-      pattern: /lamp|lighting/i,
-      category: 'Vintage Lamp',
-      confidence: 0.7
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Sunglasses` : 'Sunglasses',
+      confidence: 0.7,
+      avgPrice: 52
     }
   ];
   
-  // Find the best matching category
-  let bestMatch = null;
-  let bestScore = 0;
-  
+  // Find the best matching category (take first match since ordered by priority)
   for (const rule of categoryRules) {
     if (rule.pattern.test(allContent)) {
-      const score = rule.confidence * topScore;
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = rule;
-      }
+      console.log(`✅ Matched category: ${rule.category} (avg price: $${rule.avgPrice})`);
+      return {
+        category: rule.category,
+        avgPrice: rule.avgPrice,
+        notes: rule.notes || ''
+      };
     }
   }
   
-  if (bestMatch) {
-    console.log(`✅ Matched category: ${bestMatch.category} (confidence: ${Math.round(bestScore * 100)}%)`);
-    return bestMatch.category;
-  }
-  
-  // Fallback logic - improve generic detection
+  // Enhanced fallback
   const capitalizedPrimary = capitalizeFirst(primaryDetection);
+  let fallbackPrice = 35;
   
-  // Add brand prefix if detected and not already included
+  // Better fallback price estimation
+  if (allContent.includes('hat') || allContent.includes('cap')) fallbackPrice = 18;
+  else if (allContent.includes('shoe') || allContent.includes('sneaker')) fallbackPrice = 55;
+  else if (allContent.includes('electronic') || allContent.includes('phone')) fallbackPrice = 125;
+  else if (allContent.includes('watch')) fallbackPrice = 85;
+  else if (allContent.includes('bag') || allContent.includes('purse')) fallbackPrice = 45;
+  else if (allContent.includes('clothing') || allContent.includes('shirt')) fallbackPrice = 32;
+  
+  // Add brand prefix if detected
+  let finalCategory = capitalizedPrimary;
   if (detectedBrand && !capitalizedPrimary.toLowerCase().includes(detectedBrand)) {
-    return `${capitalizeFirst(detectedBrand)} ${capitalizedPrimary}`;
+    finalCategory = `${capitalizeFirst(detectedBrand)} ${capitalizedPrimary}`;
   }
   
-  // Add descriptive prefixes for certain items
-  const vintageItems = ['typewriter', 'rotary phone', 'gramophone', 'record player', 'radio'];
-  const collectibleItems = ['toy', 'doll', 'figure', 'game'];
-  
-  if (vintageItems.some(item => allContent.includes(item))) {
-    return `Vintage ${capitalizedPrimary}`;
-  }
-  
-  if (collectibleItems.some(item => allContent.includes(item))) {
-    return `Collectible ${capitalizedPrimary}`;
-  }
-  
-  console.log(`📝 Using fallback category: ${capitalizedPrimary}`);
-  return capitalizedPrimary;
+  console.log(`📝 Using fallback: ${finalCategory} (estimated price: $${fallbackPrice})`);
+  return {
+    category: finalCategory,
+    avgPrice: fallbackPrice,
+    notes: 'Estimated pricing - verify market value'
+  };
 }
 
 function capitalizeFirst(str) {
@@ -522,19 +489,20 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'Server is running!',
     timestamp: new Date().toISOString(),
-    version: '2.0'
+    version: '3.0 - Enhanced Accuracy'
   });
 });
 
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'Thrift Flip Analyzer Backend Server v2.0',
+    message: 'Thrift Flip Analyzer Backend Server v3.0',
     features: [
-      'Enhanced AI categorization',
-      'Brand detection',
-      'Improved accuracy',
-      'Better error handling'
+      'Enhanced categorization accuracy',
+      'Priority-based item type detection',
+      'Better brand recognition',
+      'Improved price estimation',
+      'Hat vs Equipment distinction'
     ],
     endpoints: {
       health: '/api/health',
@@ -544,16 +512,17 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log('🚀 Thrift Flip Backend Server v2.0 Started!');
+  console.log('🚀 Thrift Flip Backend Server v3.0 Started!');
   console.log(`📡 Server running on http://localhost:${PORT}`);
   console.log('🔑 Google Vision API key:', process.env.GOOGLE_VISION_API_KEY ? 'Loaded ✅' : 'Missing ❌');
-  console.log('📱 Ready to analyze images with enhanced categorization!');
+  console.log('📱 Ready for enhanced image analysis!');
   console.log('\n📋 Available endpoints:');
   console.log(`   Health check: http://localhost:${PORT}/api/health`);
   console.log(`   Image analysis: http://localhost:${PORT}/api/analyze-image`);
-  console.log('\n🆕 New features:');
+  console.log('\n🆕 v3.0 improvements:');
+  console.log('   • Hat vs Equipment distinction');
+  console.log('   • Priority-based categorization');
   console.log('   • Enhanced brand detection');
-  console.log('   • Improved categorization accuracy');
-  console.log('   • Better handling of premium items');
-  console.log('   • More specific product identification');
+  console.log('   • Better price accuracy');
+  console.log('   • More specific item types');
 });
