@@ -587,10 +587,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
 
     // Get real market data from eBay API
     console.log('💰 Fetching real market data...');
-    const marketData = await getMarketData(
-      categoryResult.category, 
-      logos.map(logo => logo.description)
-    );
+    const marketData = await getMarketDataWithFallback(categoryResult.category, logos.map(logo => logo.description));
 
     console.log('📊 Market data retrieved:', marketData);
 
@@ -617,6 +614,26 @@ function categorizeItem(detections, textDetections, logos = []) {
   const allContent = (keywords + ' ' + textContent + ' ' + logoText).toLowerCase();
   
   console.log('🏷️ Analyzing keywords:', allContent.substring(0, 200));
+
+  // Make sure this function exists in your server.js
+async function getMarketDataWithFallback(category, brands = []) {
+  console.log('🎯 Getting market data for:', category);
+  
+  // First try eBay API
+  try {
+    const ebayData = await getEbayMarketData(category, brands);
+    if (ebayData) {
+      console.log('✅ Using real eBay data');
+      return ebayData;
+    }
+  } catch (error) {
+    console.log('⚠️ eBay API failed:', error.message);
+  }
+  
+  // Fallback to accurate static data
+  console.log('📚 Using accurate static data as fallback');
+  return getAccurateStaticData(category, brands);
+}
   
   // Get the highest confidence detection
   const primaryDetection = detections[0]?.description || 'Unknown Item';
