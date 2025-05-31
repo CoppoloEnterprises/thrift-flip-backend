@@ -8,10 +8,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://claude.ai', 'https://railway.app', 'https://*.railway.app', 'https://thrift-flipper-app.netlify.app', 'https://*.netlify.app'],
+  origin: true, // Allow all origins for now
   credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 app.use(express.json());
@@ -60,7 +60,11 @@ async function getEbayMarketData(category) {
     } else if (category.toLowerCase().includes('focusrite')) {
       searchQuery = 'Focusrite Scarlett audio interface';
     } else if (category.toLowerCase().includes('nike') && category.toLowerCase().includes('sneakers')) {
-      searchQuery = 'Nike sneakers shoes -laces -insoles';
+      searchQuery = 'Nike sneakers shoes -laces -insoles -socks';
+    } else if (category.toLowerCase().includes('athletic sneakers')) {
+      searchQuery = 'athletic sneakers running shoes -laces -insoles -socks';
+    } else if (category.toLowerCase().includes('sneakers')) {
+      searchQuery = 'sneakers shoes athletic -laces -insoles -socks';
     } else if (category.toLowerCase().includes('golf')) {
       searchQuery = 'golf equipment clubs driver iron -tees -balls';
     }
@@ -96,7 +100,8 @@ async function getEbayMarketData(category) {
         // Category-specific price filtering
         if (category.toLowerCase().includes('audio interface') && price < 30) return false;
         if (category.toLowerCase().includes('focusrite') && price < 50) return false;
-        if (category.toLowerCase().includes('sneakers') && price < 20) return false;
+        if (category.toLowerCase().includes('nike') && price < 25) return false;
+        if (category.toLowerCase().includes('sneakers') && price < 15) return false;
         if (category.toLowerCase().includes('golf') && price < 15) return false;
         
         // General filter for items under $5
@@ -377,12 +382,15 @@ function categorizeItem(detections, textDetections) {
     return 'Soccer Ball';
   }
   
-  // Clothing
-  if (allContent.includes('jacket') || allContent.includes('coat') || allContent.includes('leather')) {
-    return 'Vintage Leather Jacket';
+  // Clothing - Check for Nike sneakers first
+  if ((allContent.includes('nike') || allContent.includes('swoosh')) && (allContent.includes('shoe') || allContent.includes('sneaker') || allContent.includes('footwear'))) {
+    return 'Nike Sneakers';
   }
   if (allContent.includes('shoe') || allContent.includes('sneaker') || allContent.includes('boot')) {
     return 'Athletic Sneakers';
+  }
+  if (allContent.includes('jacket') || allContent.includes('coat') || allContent.includes('leather')) {
+    return 'Vintage Leather Jacket';
   }
   if (allContent.includes('shirt') || allContent.includes('t-shirt')) {
     return 'Vintage T-Shirt';
