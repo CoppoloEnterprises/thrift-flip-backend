@@ -8,7 +8,15 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://claude.ai', 'https://railway.app', 'https://*.railway.app', 'https://*.github.io', 'https://*.netlify.app'],
+  origin: [
+    'http://localhost:3000', 
+    'https://claude.ai', 
+    'https://railway.app', 
+    'https://*.railway.app', 
+    'https://*.github.io', 
+    'https://*.netlify.app',
+    'https://thrift-flipper-app.netlify.app'  // Add your specific Netlify URL
+  ],
   credentials: true
 }));
 
