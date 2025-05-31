@@ -54,23 +54,26 @@ async function getEbayMarketData(category) {
     // Search for completed listings with improved query
     let searchQuery = category;
     
-    // Enhance search queries for better results
+    // Enhance search queries for better results - make them broader
     if (category.toLowerCase().includes('audio interface')) {
-      searchQuery = 'USB audio interface recording -cable -adapter';
+      searchQuery = 'audio interface USB';
     } else if (category.toLowerCase().includes('focusrite')) {
-      searchQuery = 'Focusrite Scarlett audio interface';
+      searchQuery = 'Focusrite Scarlett';
     } else if (category.toLowerCase().includes('nike') && category.toLowerCase().includes('sneakers')) {
-      searchQuery = 'Nike sneakers shoes -laces -insoles -socks';
+      searchQuery = 'Nike shoes';
     } else if (category.toLowerCase().includes('athletic sneakers')) {
-      searchQuery = 'athletic sneakers running shoes -laces -insoles -socks';
+      searchQuery = 'athletic shoes sneakers';
     } else if (category.toLowerCase().includes('sneakers')) {
-      searchQuery = 'sneakers shoes athletic -laces -insoles -socks';
+      searchQuery = 'sneakers shoes';
+    } else if (category.toLowerCase().includes('titleist') && category.toLowerCase().includes('golf')) {
+      searchQuery = 'Titleist golf';
     } else if (category.toLowerCase().includes('golf')) {
-      searchQuery = 'golf equipment clubs driver iron -tees -balls';
+      searchQuery = 'golf clubs';
     }
     
     const encodedQuery = encodeURIComponent(searchQuery);
-    const searchUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodedQuery}&filter=conditionIds:{3000|4000|5000}&filter=buyingOptions:{FIXED_PRICE}&sort=price&limit=50`;
+    // Remove restrictive filters to get more results
+    const searchUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodedQuery}&filter=buyingOptions:{FIXED_PRICE}&sort=price&limit=50`;
 
     const searchResponse = await fetch(searchUrl, {
       headers: {
@@ -90,22 +93,21 @@ async function getEbayMarketData(category) {
       return getFallbackMarketData(category);
     }
 
-    // Process eBay data with better filtering
+    // Process eBay data with more lenient filtering
     const items = searchData.itemSummaries;
     const prices = items
       .filter(item => {
         if (!item.price || !item.price.value) return false;
         const price = parseFloat(item.price.value);
         
-        // Category-specific price filtering
-        if (category.toLowerCase().includes('audio interface') && price < 30) return false;
-        if (category.toLowerCase().includes('focusrite') && price < 50) return false;
-        if (category.toLowerCase().includes('nike') && price < 25) return false;
-        if (category.toLowerCase().includes('sneakers') && price < 15) return false;
-        if (category.toLowerCase().includes('golf') && price < 15) return false;
+        // Much more lenient price filtering - just exclude obviously wrong items
+        if (category.toLowerCase().includes('audio interface') && price < 20) return false;
+        if (category.toLowerCase().includes('focusrite') && price < 30) return false;
+        if (category.toLowerCase().includes('nike') && price < 15) return false;
+        if (category.toLowerCase().includes('golf') && price < 10) return false;
         
-        // General filter for items under $5
-        return price >= 5;
+        // General filter for very cheap items that are likely accessories
+        return price >= 3;
       })
       .map(item => parseFloat(item.price.value));
 
@@ -114,12 +116,14 @@ async function getEbayMarketData(category) {
       return getFallbackMarketData(category);
     }
 
-    // Remove outliers (prices more than 3 standard deviations from mean)
+    // Remove extreme outliers only (more than 4 standard deviations)
     const mean = prices.reduce((a, b) => a + b, 0) / prices.length;
     const stdDev = Math.sqrt(prices.map(p => Math.pow(p - mean, 2)).reduce((a, b) => a + b, 0) / prices.length);
-    const filteredPrices = prices.filter(p => Math.abs(p - mean) <= 2 * stdDev);
+    const filteredPrices = prices.filter(p => Math.abs(p - mean) <= 4 * stdDev);
 
-    const avgPrice = Math.round(filteredPrices.reduce((a, b) => a + b, 0) / filteredPrices.length);
+    // If we filtered out too many, just use all prices
+    const finalPrices = filteredPrices.length >= 5 ? filteredPrices : prices;
+    const avgPrice = Math.round(finalPrices.reduce((a, b) => a + b, 0) / finalPrices.length);
     const sellThroughRate = Math.min(95, Math.max(45, 60 + Math.random() * 25)); // Estimate based on category
     const avgListingTime = Math.max(3, Math.round(15 - (sellThroughRate - 50) / 5)); // Higher sell-through = faster sales
     
@@ -136,7 +140,7 @@ async function getEbayMarketData(category) {
     // Determine seasonality based on category
     const seasonality = getSeasonality(category);
 
-    console.log('✅ eBay data processed:', { avgPrice, sellThroughRate: Math.round(sellThroughRate), avgListingTime, demandLevel });
+    console.log('✅ eBay data processed:', { avgPrice, sellThroughRate: Math.round(sellThroughRate), avgListingTime, demandLevel, itemCount: items.length, priceCount: finalPrices.length });
 
     return {
       avgSoldPrice: avgPrice,
