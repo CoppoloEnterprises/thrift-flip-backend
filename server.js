@@ -362,7 +362,7 @@ function categorizeItem(detections, textDetections) {
   // Get the highest confidence detection as primary category
   const primaryDetection = detections[0]?.description || 'Unknown Item';
   
-  // Sports equipment - specific brand detection
+  // Sports equipment - specific brand detection (check these first!)
   if ((allContent.includes('football') || allContent.includes('american football')) && allContent.includes('wilson')) {
     return 'Wilson Football';
   }
@@ -380,6 +380,17 @@ function categorizeItem(detections, textDetections) {
   }
   if (allContent.includes('soccer') && allContent.includes('ball')) {
     return 'Soccer Ball';
+  }
+  
+  // Golf equipment - check for specific brands first
+  if (allContent.includes('titleist') && (allContent.includes('golf') || allContent.includes('club') || allContent.includes('iron') || allContent.includes('wedge'))) {
+    return 'Titleist Golf Equipment';
+  }
+  if (allContent.includes('callaway') && (allContent.includes('golf') || allContent.includes('club'))) {
+    return 'Callaway Golf Equipment';
+  }
+  if (allContent.includes('golf') || allContent.includes('golf club') || allContent.includes('iron') || allContent.includes('wedge') || allContent.includes('driver') || allContent.includes('putter')) {
+    return 'Golf Equipment';
   }
   
   // Clothing - Check for Nike sneakers first
