@@ -49,9 +49,22 @@ async function getEbayMarketData(category) {
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
 
-    // Search for completed listings
-    const searchQuery = encodeURIComponent(category);
-    const searchUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${searchQuery}&filter=conditionIds:{3000|4000|5000}&filter=buyingOptions:{FIXED_PRICE}&sort=price&limit=50`;
+    // Search for completed listings with improved query
+    let searchQuery = category;
+    
+    // Enhance search queries for better results
+    if (category.toLowerCase().includes('audio interface')) {
+      searchQuery = 'USB audio interface recording -cable -adapter';
+    } else if (category.toLowerCase().includes('focusrite')) {
+      searchQuery = 'Focusrite Scarlett audio interface';
+    } else if (category.toLowerCase().includes('nike') && category.toLowerCase().includes('sneakers')) {
+      searchQuery = 'Nike sneakers shoes -laces -insoles';
+    } else if (category.toLowerCase().includes('golf')) {
+      searchQuery = 'golf equipment clubs driver iron -tees -balls';
+    }
+    
+    const encodedQuery = encodeURIComponent(searchQuery);
+    const searchUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodedQuery}&filter=conditionIds:{3000|4000|5000}&filter=buyingOptions:{FIXED_PRICE}&sort=price&limit=50`;
 
     const searchResponse = await fetch(searchUrl, {
       headers: {
@@ -71,10 +84,22 @@ async function getEbayMarketData(category) {
       return getFallbackMarketData(category);
     }
 
-    // Process eBay data
+    // Process eBay data with better filtering
     const items = searchData.itemSummaries;
     const prices = items
-      .filter(item => item.price && item.price.value && parseFloat(item.price.value) > 5) // Filter out items under $5
+      .filter(item => {
+        if (!item.price || !item.price.value) return false;
+        const price = parseFloat(item.price.value);
+        
+        // Category-specific price filtering
+        if (category.toLowerCase().includes('audio interface') && price < 30) return false;
+        if (category.toLowerCase().includes('focusrite') && price < 50) return false;
+        if (category.toLowerCase().includes('sneakers') && price < 20) return false;
+        if (category.toLowerCase().includes('golf') && price < 15) return false;
+        
+        // General filter for items under $5
+        return price >= 5;
+      })
       .map(item => parseFloat(item.price.value));
 
     if (prices.length === 0) {
