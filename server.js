@@ -1,18 +1,15 @@
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const fetch = require('node-fetch');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Enable CORS
 app.use(cors({
-  origin: true,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: ['http://localhost:3000', 'https://claude.ai', 'https://railway.app', 'https://*.railway.app', 'https://*.github.io', 'https://*.netlify.app'],
+  credentials: true
 }));
 
 app.use(express.json());
@@ -25,357 +22,6 @@ const upload = multer({
   }
 });
 
-// Global variable to store access token
-let ebayAccessToken = null;
-let tokenExpiration = null;
-
-// Get OAuth access token for eBay APIs
-async function getEbayAccessToken() {
-  try {
-    // Check if we have a valid token
-    if (ebayAccessToken && tokenExpiration && new Date() < tokenExpiration) {
-      return ebayAccessToken;
-    }
-
-    console.log('🔑 Getting new eBay OAuth token...');
-
-    // Create credentials for OAuth
-    const credentials = Buffer.from(`${process.env.EBAY_APP_ID}:${process.env.EBAY_CERT_ID}`).toString('base64');
-
-    const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${credentials}`
-      },
-      body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope'
-    });
-
-    const data = await response.json();
-
-    if (data.access_token) {
-      ebayAccessToken = data.access_token;
-      // Set expiration to 5 minutes before actual expiration
-      tokenExpiration = new Date(Date.now() + (data.expires_in - 300) * 1000);
-      console.log('✅ eBay OAuth token obtained successfully');
-      return ebayAccessToken;
-    } else {
-      console.error('❌ Failed to get eBay token:', data);
-      throw new Error('Failed to get eBay access token');
-    }
-
-  } catch (error) {
-    console.error('❌ Error getting eBay token:', error);
-    throw error;
-  }
-}
-
-// Try eBay Sell Analytics API (should match your scopes)
-async function searchEbaySellAnalytics(searchTerm, accessToken) {
-  try {
-    console.log('🔍 Trying eBay Sell Analytics API for:', searchTerm);
-    
-    // Try to get market insights using Sell Analytics API
-    const url = `https://api.ebay.com/sell/analytics/v1/seller_standards_profile`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US'
-      }
-    });
-
-    console.log('📡 Sell Analytics API Response status:', response.status);
-    const data = await response.json();
-    console.log('📋 Sell Analytics API Response:', JSON.stringify(data, null, 2));
-
-    return { success: response.status === 200, data };
-
-  } catch (error) {
-    console.error('❌ Error with Sell Analytics API:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// Try eBay Marketplace Insights API
-async function searchEbayMarketplaceInsights(searchTerm, accessToken) {
-  try {
-    console.log('🔍 Trying eBay Marketplace Insights for:', searchTerm);
-    
-    // This is a hypothetical endpoint - we'll test what's available
-    const url = `https://api.ebay.com/commerce/marketplace_insights/v1/item_sales/search?q=${encodeURIComponent(searchTerm)}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US'
-      }
-    });
-
-    console.log('📡 Marketplace Insights API Response status:', response.status);
-    const data = await response.json();
-    console.log('📋 Marketplace Insights API Response:', JSON.stringify(data, null, 2));
-
-    return { success: response.status === 200, data };
-
-  } catch (error) {
-    console.error('❌ Error with Marketplace Insights API:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// Enhanced market data with better estimates - FIXED VERSION
-function getEnhancedMarketData(itemName) {
-  const categoryLower = itemName.toLowerCase();
-  
-  console.log('🎯 Enhanced market data for:', itemName, 'lowercase:', categoryLower);
-  
-  // Wilson Football - based on actual eBay research
-  if (categoryLower.includes('wilson') && categoryLower.includes('football')) {
-    return { 
-      avgSoldPrice: 32, 
-      sellThroughRate: 68, 
-      avgListingTime: 9, 
-      demandLevel: "High", 
-      seasonality: "Fall peak (Aug-Dec)", 
-      dataSource: 'Market Research',
-      notes: 'Wilson footballs sell well, especially during football season'
-    };
-  }
-  
-  // Footjoy Golf Shoes - premium golf brand
-  if (categoryLower.includes('footjoy') || (categoryLower.includes('golf') && categoryLower.includes('shoes'))) {
-    return { 
-      avgSoldPrice: 58, 
-      sellThroughRate: 62, 
-      avgListingTime: 14, 
-      demandLevel: "Medium", 
-      seasonality: "Spring/Summer peak (Mar-Aug)", 
-      dataSource: 'Market Research',
-      notes: 'Footjoy is premium golf brand, good resale value'
-    };
-  }
-  
- // Titleist Golf Hat - premium golf accessories (FIXED CHECK)
-  if (categoryLower.includes('titleist') && (categoryLower.includes('golf') || categoryLower.includes('hat') || categoryLower.includes('cap'))) {
-    console.log('✅ Matched Titleist Golf Hat pricing');
-    return { 
-      avgSoldPrice: 28, 
-      sellThroughRate: 58, 
-      avgListingTime: 12, 
-      demandLevel: "Medium", 
-      seasonality: "Spring/Summer peak (Mar-Aug)", 
-      dataSource: 'Market Research',
-      notes: 'Titleist brand has strong golf community following'
-    };
-  }
-  
-  // Generic Athletic Sneakers
-  if (categoryLower.includes('athletic') && categoryLower.includes('sneakers')) {
-    return { 
-      avgSoldPrice: 72, 
-      sellThroughRate: 75, 
-      avgListingTime: 7, 
-      demandLevel: "High", 
-      seasonality: "Year-round, peak in Jan/Sep", 
-      dataSource: 'Market Research',
-      notes: 'Athletic shoes are always in demand on eBay'
-    };
-  }
-  
-  // Nike Basketball
-  if (categoryLower.includes('nike') && categoryLower.includes('basketball')) {
-    return { 
-      avgSoldPrice: 45, 
-      sellThroughRate: 72, 
-      avgListingTime: 8, 
-      demandLevel: "High", 
-      seasonality: "Fall/Winter peak (Oct-Mar)", 
-      dataSource: 'Market Research',
-      notes: 'Nike basketball items have strong brand recognition'
-    };
-  }
-  
-  // Baseball Equipment/Caps
-  if (categoryLower.includes('baseball') && (categoryLower.includes('cap') || categoryLower.includes('hat') || categoryLower.includes('equipment'))) {
-    return { 
-      avgSoldPrice: 24, 
-      sellThroughRate: 55, 
-      avgListingTime: 16, 
-      demandLevel: "Medium", 
-      seasonality: "Spring/Summer peak (Mar-Sep)", 
-      dataSource: 'Market Research',
-      notes: 'Baseball items peak during season, vintage teams sell better'
-    };
-  }
-  
-  // Generic Football
-  if (categoryLower.includes('football')) {
-    return { 
-      avgSoldPrice: 28, 
-      sellThroughRate: 65, 
-      avgListingTime: 11, 
-      demandLevel: "Medium", 
-      seasonality: "Fall peak (Aug-Dec)", 
-      dataSource: 'Market Research',
-      notes: 'Football items sell best during NFL season'
-    };
-  }
-  
-  // Generic Basketball
-  if (categoryLower.includes('basketball')) {
-    return { 
-      avgSoldPrice: 35, 
-      sellThroughRate: 62, 
-      avgListingTime: 12, 
-      demandLevel: "Medium", 
-      seasonality: "Fall/Winter peak (Oct-Mar)", 
-      dataSource: 'Market Research',
-      notes: 'Basketball items peak during NBA season'
-    };
-  }
-  
-  // Generic Golf Items
-  if (categoryLower.includes('golf')) {
-    return { 
-      avgSoldPrice: 42, 
-      sellThroughRate: 58, 
-      avgListingTime: 15, 
-      demandLevel: "Medium", 
-      seasonality: "Spring/Summer peak (Mar-Aug)", 
-      dataSource: 'Market Research',
-      notes: 'Golf items sell best during golf season'
-    };
-  }
-  
-  // Generic Shoes/Sneakers
-  if (categoryLower.includes('shoe') || categoryLower.includes('sneaker') || categoryLower.includes('boot')) {
-    return { 
-      avgSoldPrice: 48, 
-      sellThroughRate: 68, 
-      avgListingTime: 10, 
-      demandLevel: "High", 
-      seasonality: "Year-round", 
-      dataSource: 'Market Research',
-      notes: 'Shoes are consistently popular on eBay'
-    };
-  }
-  
-  // Generic Hats/Caps
-  if (categoryLower.includes('hat') || categoryLower.includes('cap')) {
-    return { 
-      avgSoldPrice: 22, 
-      sellThroughRate: 52, 
-      avgListingTime: 18, 
-      demandLevel: "Medium", 
-      seasonality: "Year-round", 
-      dataSource: 'Market Research',
-      notes: 'Sports team hats and designer brands sell better'
-    };
-  }
-  
-  // Electronics
-  if (categoryLower.includes('electronic') || categoryLower.includes('phone') || categoryLower.includes('camera')) {
-    return { 
-      avgSoldPrice: 85, 
-      sellThroughRate: 45, 
-      avgListingTime: 22, 
-      demandLevel: "Medium", 
-      seasonality: "Holiday peak (Nov-Dec)", 
-      dataSource: 'Market Research',
-      notes: 'Electronics sell well but competition is high'
-    };
-  }
-  
-  // Books
-  if (categoryLower.includes('book')) {
-    return { 
-      avgSoldPrice: 18, 
-      sellThroughRate: 35, 
-      avgListingTime: 28, 
-      demandLevel: "Low", 
-      seasonality: "Back-to-school peak (Aug-Sep)", 
-      dataSource: 'Market Research',
-      notes: 'Textbooks and rare books perform better than fiction'
-    };
-  }
-  
-  // Default fallback
-  return { 
-    avgSoldPrice: 38, 
-    sellThroughRate: 55, 
-    avgListingTime: 16, 
-    demandLevel: "Medium", 
-    seasonality: "Year-round",
-    dataSource: 'General Estimate',
-    notes: 'Consider researching this specific item category'
-  };
-}
-
-// Get eBay market data - try multiple APIs then fall back to enhanced estimates
-async function getEbayMarketData(itemName) {
-  try {
-    console.log('🛒 Fetching eBay data for:', itemName);
-    
-    // Get access token
-    const accessToken = await getEbayAccessToken();
-    
-    // Try Sell Analytics API first
-    const analyticsResult = await searchEbaySellAnalytics(itemName, accessToken);
-    if (analyticsResult.success) {
-      console.log('✅ Sell Analytics API worked!');
-      // Process analytics data here when we get it working
-    }
-    
-    // Try Marketplace Insights API
-    const insightsResult = await searchEbayMarketplaceInsights(itemName, accessToken);
-    if (insightsResult.success) {
-      console.log('✅ Marketplace Insights API worked!');
-      // Process insights data here when we get it working
-    }
-    
-    // For now, use enhanced estimates (much better than before)
-    console.log('📊 Using enhanced market research data');
-    return getEnhancedMarketData(itemName);
-    
-  } catch (error) {
-    console.error('❌ eBay API error:', error.message);
-    return getEnhancedMarketData(itemName);
-  }
-}
-
-// Debug endpoint to test different eBay APIs
-app.get('/api/debug-ebay-apis/:searchTerm', async (req, res) => {
-  try {
-    const searchTerm = req.params.searchTerm;
-    console.log('🔧 Debug: Testing multiple eBay APIs with term:', searchTerm);
-    
-    const accessToken = await getEbayAccessToken();
-    
-    // Test Sell Analytics API
-    const analyticsResult = await searchEbaySellAnalytics(searchTerm, accessToken);
-    
-    // Test Marketplace Insights API
-    const insightsResult = await searchEbayMarketplaceInsights(searchTerm, accessToken);
-    
-    res.json({
-      searchTerm,
-      accessToken: accessToken ? 'Token obtained' : 'No token',
-      sellAnalytics: analyticsResult,
-      marketplaceInsights: insightsResult,
-      enhancedEstimate: getEnhancedMarketData(searchTerm)
-    });
-    
-  } catch (error) {
-    console.error('🔧 Debug Error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Image analysis endpoint
 app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
   try {
@@ -385,9 +31,11 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'No image file provided' });
     }
 
+    // Convert image to base64
     const base64Image = req.file.buffer.toString('base64');
     console.log('🔄 Converting image and calling Google Vision API...');
 
+    // Call Google Vision API
     const visionRequest = {
       requests: [
         {
@@ -395,10 +43,11 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
             content: base64Image
           },
           features: [
-            { type: 'OBJECT_LOCALIZATION', maxResults: 10 },
-            { type: 'LABEL_DETECTION', maxResults: 10 },
+            { type: 'OBJECT_LOCALIZATION', maxResults: 15 },
+            { type: 'LABEL_DETECTION', maxResults: 15 },
             { type: 'TEXT_DETECTION', maxResults: 10 },
-            { type: 'LOGO_DETECTION', maxResults: 10 }
+            { type: 'LOGO_DETECTION', maxResults: 10 },
+            { type: 'PRODUCT_SEARCH', maxResults: 5 }
           ]
         }
       ]
@@ -422,6 +71,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: data.error.message });
     }
 
+    // Process the results
     const annotations = data.responses[0];
     const objects = annotations.localizedObjectAnnotations || [];
     const labels = annotations.labelAnnotations || [];
@@ -429,33 +79,35 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     const logos = annotations.logoAnnotations || [];
 
     console.log('🔍 Google Vision detected:');
-    console.log('Objects:', objects.map(o => o.name));
-    console.log('Labels:', labels.map(l => l.description));
-    console.log('Logos:', logos.map(l => l.description));
+    console.log('Objects:', objects.map(o => `${o.name} (${Math.round(o.score * 100)}%)`));
+    console.log('Labels:', labels.map(l => `${l.description} (${Math.round(l.score * 100)}%)`));
+    console.log('Logos:', logos.map(l => `${l.description} (${Math.round(l.score * 100)}%)`));
+    if (text.length > 0) {
+      console.log('Text detected:', text[0].description.substring(0, 100));
+    }
 
+    // Combine all detections
     const allDetections = [
       ...objects.map(obj => ({ type: 'object', description: obj.name, score: obj.score })),
       ...labels.map(label => ({ type: 'label', description: label.description, score: label.score })),
-      ...logos.map(logo => ({ type: 'logo', description: logo.description, score: logo.score }))
+      ...logos.map(logo => ({ type: 'logo', description: logo.description, score: logo.score * 1.2 })) // Boost logo confidence
     ];
 
+    // Sort by score
     allDetections.sort((a, b) => b.score - a.score);
 
+    // Enhanced categorization
     const category = categorizeItem(allDetections, text);
     const confidence = Math.round((allDetections[0]?.score || 0) * 100);
 
     console.log('✅ Final result:', category, `(${confidence}% confidence)`);
-
-    // Get market data (enhanced estimates for now)
-    const marketData = await getEbayMarketData(category);
 
     res.json({
       category,
       confidence,
       detections: allDetections,
       brands: logos.map(logo => logo.description),
-      text: text.map(t => t.description).join(' '),
-      ...marketData
+      text: text.map(t => t.description).join(' ')
     });
 
   } catch (error) {
@@ -470,41 +122,391 @@ function categorizeItem(detections, textDetections) {
   const allContent = (keywords + ' ' + textContent).toLowerCase();
   
   console.log('🏷️ Analyzing keywords:', allContent);
+  console.log('🔍 Top detections:', detections.slice(0, 3).map(d => `${d.description} (${Math.round(d.score * 100)}%)`));
   
+  // Get the highest confidence detection as primary category
   const primaryDetection = detections[0]?.description || 'Unknown Item';
+  const topScore = detections[0]?.score || 0;
   
-  // Improved categorization with brand detection
-  if ((allContent.includes('football') || allContent.includes('american football')) && allContent.includes('wilson')) {
-    return 'Wilson Football';
-  }
-  if (allContent.includes('football') || allContent.includes('american football')) {
-    return 'Football';
-  }
-  if ((allContent.includes('shoe') || allContent.includes('golf')) && allContent.includes('footjoy')) {
-    return 'Footjoy Golf Shoes';
-  }
-  if (allContent.includes('basketball') && allContent.includes('nike')) {
-    return 'Nike Basketball';
-  }
-  if (allContent.includes('basketball')) {
-    return 'Basketball';
-  }
-  if ((allContent.includes('hat') || allContent.includes('cap')) && allContent.includes('titleist')) {
-    return 'Titleist Golf Hat';
-  }
-  if ((allContent.includes('hat') || allContent.includes('cap')) && allContent.includes('baseball')) {
-    return 'Baseball Cap';
-  }
-  if (allContent.includes('hat') || allContent.includes('cap')) {
-    return 'Hat';
-  }
-  if (allContent.includes('shoe') || allContent.includes('sneaker') || allContent.includes('boot')) {
-    return 'Athletic Sneakers';
+  // Enhanced brand and model detection
+  const brands = {
+    'nike': /nike|swoosh|air\s+jordan|jordan\s+\d+/i,
+    'adidas': /adidas|three\s+stripes|trefoil/i,
+    'wilson': /wilson/i,
+    'titleist': /titleist/i,
+    'footjoy': /footjoy|fj/i,
+    'callaway': /callaway/i,
+    'ping': /ping\s+golf|ping/i,
+    'taylormade': /taylormade|taylor\s+made/i,
+    'apple': /apple|iphone|ipad|macbook|airpods/i,
+    'samsung': /samsung|galaxy/i,
+    'canon': /canon/i,
+    'nikon': /nikon/i,
+    'sony': /sony/i,
+    'rolex': /rolex/i,
+    'omega': /omega/i,
+    'coach': /coach/i,
+    'louis vuitton': /louis\s+vuitton|lv\s+monogram/i,
+    'gucci': /gucci/i,
+    'polo ralph lauren': /polo\s+ralph\s+lauren|polo/i,
+    'patagonia': /patagonia/i,
+    'north face': /north\s+face|northface/i,
+    'levi': /levi|levis/i,
+    'carhartt': /carhartt/i,
+    'under armour': /under\s+armour|underarmour/i,
+    'supreme': /supreme/i,
+    'off-white': /off-white|off\s+white/i,
+    'yeezy': /yeezy|kanye/i
+  };
+  
+  // Detect brands
+  let detectedBrand = '';
+  for (const [brand, pattern] of Object.entries(brands)) {
+    if (pattern.test(allContent)) {
+      detectedBrand = brand;
+      console.log(`🏷️ Detected brand: ${brand}`);
+      break;
+    }
   }
   
-  // Use Google Vision's most confident result
-  const capitalizedPrimary = primaryDetection.charAt(0).toUpperCase() + primaryDetection.slice(1);
+  // Enhanced category detection with confidence scoring
+  const categoryRules = [
+    // High-Value Sneakers
+    {
+      pattern: /(air\s+jordan|jordan\s+\d+)/i,
+      category: 'Air Jordan Sneakers',
+      confidence: 0.95
+    },
+    {
+      pattern: /yeezy/i,
+      category: 'Yeezy Sneakers',
+      confidence: 0.95
+    },
+    {
+      pattern: /(nike|swoosh).*(?:shoe|sneaker|trainer)/i,
+      category: 'Nike Sneakers',
+      confidence: 0.9
+    },
+    {
+      pattern: /(adidas|three\s+stripes).*(?:shoe|sneaker|trainer)/i,
+      category: 'Adidas Sneakers',
+      confidence: 0.9
+    },
+    
+    // Premium Golf Equipment
+    {
+      pattern: /titleist.*(?:golf|club|ball)/i,
+      category: 'Titleist Golf Equipment',
+      confidence: 0.95
+    },
+    {
+      pattern: /callaway.*(?:golf|club|driver)/i,
+      category: 'Callaway Golf Equipment',
+      confidence: 0.95
+    },
+    {
+      pattern: /ping.*(?:golf|club|putter)/i,
+      category: 'Ping Golf Equipment',
+      confidence: 0.95
+    },
+    {
+      pattern: /taylormade.*(?:golf|club|driver)/i,
+      category: 'TaylorMade Golf Equipment',
+      confidence: 0.95
+    },
+    {
+      pattern: /golf.*(?:club|driver|iron|putter|wedge)/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Golf Equipment` : 'Golf Equipment',
+      confidence: 0.8
+    },
+    
+    // Electronics - High Value
+    {
+      pattern: /(iphone|apple.*phone)/i,
+      category: 'iPhone',
+      confidence: 0.95
+    },
+    {
+      pattern: /(ipad|apple.*tablet)/i,
+      category: 'iPad',
+      confidence: 0.95
+    },
+    {
+      pattern: /(macbook|apple.*laptop)/i,
+      category: 'MacBook',
+      confidence: 0.95
+    },
+    {
+      pattern: /airpods/i,
+      category: 'AirPods',
+      confidence: 0.95
+    },
+    {
+      pattern: /(galaxy|samsung).*(?:phone|smartphone)/i,
+      category: 'Samsung Galaxy Phone',
+      confidence: 0.9
+    },
+    {
+      pattern: /smartphone|mobile.*phone|cell.*phone/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Phone` : 'Smartphone',
+      confidence: 0.8
+    },
+    {
+      pattern: /(dslr|mirrorless).*camera|camera.*(?:canon|nikon|sony)/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Camera` : 'DSLR Camera',
+      confidence: 0.85
+    },
+    {
+      pattern: /camera/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Camera` : 'Camera',
+      confidence: 0.8
+    },
+    
+    // Sports Equipment
+    {
+      pattern: /(american\s+)?football.*wilson|wilson.*football/i,
+      category: 'Wilson Football',
+      confidence: 0.95
+    },
+    {
+      pattern: /(american\s+)?football(?!.*soccer)/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Football` : 'Football',
+      confidence: 0.8
+    },
+    {
+      pattern: /basketball/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Basketball` : 'Basketball',
+      confidence: 0.8
+    },
+    {
+      pattern: /baseball.*(?:bat|glove)|softball/i,
+      category: 'Baseball Equipment',
+      confidence: 0.8
+    },
+    {
+      pattern: /soccer.*ball|football.*(?:round|soccer)/i,
+      category: 'Soccer Ball',
+      confidence: 0.8
+    },
+    {
+      pattern: /tennis.*(?:racket|racquet)/i,
+      category: 'Tennis Racket',
+      confidence: 0.8
+    },
+    
+    // Designer Clothing
+    {
+      pattern: /supreme/i,
+      category: 'Supreme Clothing',
+      confidence: 0.95
+    },
+    {
+      pattern: /off-white|off\s+white/i,
+      category: 'Off-White Clothing',
+      confidence: 0.95
+    },
+    {
+      pattern: /polo\s+ralph\s+lauren/i,
+      category: 'Polo Ralph Lauren',
+      confidence: 0.9
+    },
+    {
+      pattern: /patagonia/i,
+      category: 'Patagonia Jacket',
+      confidence: 0.85
+    },
+    {
+      pattern: /north\s+face/i,
+      category: 'North Face Jacket',
+      confidence: 0.85
+    },
+    {
+      pattern: /(leather\s+)?jacket|coat/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Jacket` : 'Vintage Leather Jacket',
+      confidence: 0.7
+    },
+    {
+      pattern: /(?:running|athletic|sports)\s+(?:shoe|sneaker)/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Sneakers` : 'Athletic Sneakers',
+      confidence: 0.7
+    },
+    {
+      pattern: /jeans|denim/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Jeans` : 'Designer Jeans',
+      confidence: 0.7
+    },
+    {
+      pattern: /hoodie|sweatshirt/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Hoodie` : 'Branded Hoodie',
+      confidence: 0.7
+    },
+    {
+      pattern: /(t-?shirt|tee)/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} T-Shirt` : 'Vintage T-Shirt',
+      confidence: 0.6
+    },
+    
+    // Luxury Accessories
+    {
+      pattern: /rolex/i,
+      category: 'Rolex Watch',
+      confidence: 0.95
+    },
+    {
+      pattern: /omega.*watch/i,
+      category: 'Omega Watch',
+      confidence: 0.95
+    },
+    {
+      pattern: /louis\s+vuitton|lv\s+monogram/i,
+      category: 'Louis Vuitton Handbag',
+      confidence: 0.95
+    },
+    {
+      pattern: /gucci/i,
+      category: 'Gucci Accessory',
+      confidence: 0.95
+    },
+    {
+      pattern: /coach.*(?:bag|purse|handbag)/i,
+      category: 'Coach Handbag',
+      confidence: 0.9
+    },
+    {
+      pattern: /watch|timepiece/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Watch` : 'Luxury Watch',
+      confidence: 0.8
+    },
+    {
+      pattern: /(?:hand)?bag|purse|tote|satchel/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Handbag` : 'Designer Handbag',
+      confidence: 0.75
+    },
+    {
+      pattern: /backpack|rucksack/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Backpack` : 'Backpack',
+      confidence: 0.7
+    },
+    {
+      pattern: /sunglasses/i,
+      category: detectedBrand ? `${capitalizeFirst(detectedBrand)} Sunglasses` : 'Designer Sunglasses',
+      confidence: 0.7
+    },
+    
+    // Collectibles
+    {
+      pattern: /vinyl|record|lp\s+/i,
+      category: 'Vintage Vinyl Record',
+      confidence: 0.8
+    },
+    {
+      pattern: /comic.*book/i,
+      category: 'Comic Book',
+      confidence: 0.8
+    },
+    {
+      pattern: /action.*figure|collectible.*figure/i,
+      category: 'Collectible Action Figure',
+      confidence: 0.8
+    },
+    {
+      pattern: /trading.*card|pokemon.*card|magic.*card/i,
+      category: 'Trading Cards',
+      confidence: 0.8
+    },
+    
+    // Tools & Equipment
+    {
+      pattern: /power.*tool|drill|saw/i,
+      category: 'Power Tools',
+      confidence: 0.8
+    },
+    {
+      pattern: /tool|wrench|hammer/i,
+      category: 'Hand Tools',
+      confidence: 0.7
+    },
+    
+    // Home & Kitchen
+    {
+      pattern: /(?:kitchen|stand).*mixer|kitchenaid/i,
+      category: 'Kitchen Mixer',
+      confidence: 0.8
+    },
+    {
+      pattern: /blender|food.*processor/i,
+      category: 'Kitchen Appliance',
+      confidence: 0.8
+    },
+    {
+      pattern: /cast.*iron|le.*creuset/i,
+      category: 'Cast Iron Cookware',
+      confidence: 0.8
+    },
+    
+    // Art & Decor
+    {
+      pattern: /pottery|ceramic|vase/i,
+      category: 'Vintage Pottery',
+      confidence: 0.7
+    },
+    {
+      pattern: /painting|artwork|print/i,
+      category: 'Artwork',
+      confidence: 0.7
+    },
+    {
+      pattern: /lamp|lighting/i,
+      category: 'Vintage Lamp',
+      confidence: 0.7
+    }
+  ];
+  
+  // Find the best matching category
+  let bestMatch = null;
+  let bestScore = 0;
+  
+  for (const rule of categoryRules) {
+    if (rule.pattern.test(allContent)) {
+      const score = rule.confidence * topScore;
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = rule;
+      }
+    }
+  }
+  
+  if (bestMatch) {
+    console.log(`✅ Matched category: ${bestMatch.category} (confidence: ${Math.round(bestScore * 100)}%)`);
+    return bestMatch.category;
+  }
+  
+  // Fallback logic - improve generic detection
+  const capitalizedPrimary = capitalizeFirst(primaryDetection);
+  
+  // Add brand prefix if detected and not already included
+  if (detectedBrand && !capitalizedPrimary.toLowerCase().includes(detectedBrand)) {
+    return `${capitalizeFirst(detectedBrand)} ${capitalizedPrimary}`;
+  }
+  
+  // Add descriptive prefixes for certain items
+  const vintageItems = ['typewriter', 'rotary phone', 'gramophone', 'record player', 'radio'];
+  const collectibleItems = ['toy', 'doll', 'figure', 'game'];
+  
+  if (vintageItems.some(item => allContent.includes(item))) {
+    return `Vintage ${capitalizedPrimary}`;
+  }
+  
+  if (collectibleItems.some(item => allContent.includes(item))) {
+    return `Collectible ${capitalizedPrimary}`;
+  }
+  
+  console.log(`📝 Using fallback category: ${capitalizedPrimary}`);
   return capitalizedPrimary;
+}
+
+function capitalizeFirst(str) {
+  return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
 // Health check endpoint
@@ -512,30 +514,38 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'Server is running!',
     timestamp: new Date().toISOString(),
-    ebayIntegration: 'Multiple APIs + Enhanced Estimates'
+    version: '2.0'
   });
 });
 
+// Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'Thrift Flip Analyzer Backend Server',
+    message: 'Thrift Flip Analyzer Backend Server v2.0',
+    features: [
+      'Enhanced AI categorization',
+      'Brand detection',
+      'Improved accuracy',
+      'Better error handling'
+    ],
     endpoints: {
       health: '/api/health',
-      analyze: '/api/analyze-image (POST)',
-      debugEbayAPIs: '/api/debug-ebay-apis/:searchTerm'
-    },
-    integrations: {
-      googleVision: 'Active',
-      ebayAPIs: 'Testing Multiple Endpoints',
-      enhancedEstimates: 'Active'
+      analyze: '/api/analyze-image (POST)'
     }
   });
 });
 
 app.listen(PORT, () => {
-  console.log('🚀 Thrift Flip Backend Server Started!');
+  console.log('🚀 Thrift Flip Backend Server v2.0 Started!');
   console.log(`📡 Server running on http://localhost:${PORT}`);
-  console.log('🔑 Google Vision API key loaded');
-  console.log('🛒 eBay APIs + Enhanced Estimates ready');
-  console.log('📱 Ready to analyze images with smart market data!');
+  console.log('🔑 Google Vision API key:', process.env.GOOGLE_VISION_API_KEY ? 'Loaded ✅' : 'Missing ❌');
+  console.log('📱 Ready to analyze images with enhanced categorization!');
+  console.log('\n📋 Available endpoints:');
+  console.log(`   Health check: http://localhost:${PORT}/api/health`);
+  console.log(`   Image analysis: http://localhost:${PORT}/api/analyze-image`);
+  console.log('\n🆕 New features:');
+  console.log('   • Enhanced brand detection');
+  console.log('   • Improved categorization accuracy');
+  console.log('   • Better handling of premium items');
+  console.log('   • More specific product identification');
 });
