@@ -27,40 +27,60 @@ async function getEbayAccessToken() {
   try {
     const credentials = Buffer.from(`${process.env.EBAY_CLIENT_ID}:${process.env.EBAY_CLIENT_SECRET}`).toString('base64');
     
+    // Try the most basic public scope first
     const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Authorization': `Basic ${credentials}`
       },
-      body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope/buy.item.browse'
+      body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope/buy.browse.public'
     });
 
     const data = await response.json();
     if (data.access_token) {
-      console.log('✅ eBay OAuth token obtained');
+      console.log('✅ eBay OAuth token obtained with public scope');
       return data.access_token;
     } else {
-      console.error('❌ Failed to get eBay token:', data);
+      console.error('❌ Failed to get eBay token with public scope:', data);
       
-      // Try alternative scope if first one fails
-      console.log('🔄 Trying alternative eBay scope...');
-      const altResponse = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+      // Try without any specific scope
+      console.log('🔄 Trying eBay with minimal scope...');
+      const minResponse = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Authorization': `Basic ${credentials}`
         },
-        body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope/buy.browse.public'
+        body: 'grant_type=client_credentials'
       });
 
-      const altData = await altResponse.json();
-      if (altData.access_token) {
-        console.log('✅ eBay OAuth token obtained with alternative scope');
-        return altData.access_token;
+      const minData = await minResponse.json();
+      if (minData.access_token) {
+        console.log('✅ eBay OAuth token obtained with minimal scope');
+        return minData.access_token;
       } else {
-        console.error('❌ Failed with alternative scope:', altData);
-        return null;
+        console.error('❌ Failed with minimal scope:', minData);
+        
+        // One more try with the basic Browse API scope
+        console.log('🔄 Trying basic browse scope...');
+        const basicResponse = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': `Basic ${credentials}`
+          },
+          body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope/buy.item.browse'
+        });
+
+        const basicData = await basicResponse.json();
+        if (basicData.access_token) {
+          console.log('✅ eBay OAuth token obtained with basic browse scope');
+          return basicData.access_token;
+        } else {
+          console.error('❌ All eBay scope attempts failed:', basicData);
+          return null;
+        }
       }
     }
   } catch (error) {
@@ -128,9 +148,9 @@ function generateIntelligentMarketData(visionData, searchQueries) {
     avgListingTime = 7;
     demandLevel = "Very High";
   } else if (logos.some(logo => ['titleist', 'callaway', 'ping', 'taylormade'].includes(logo.toLowerCase()))) {
-    basePrice = 35;
-    sellThroughRate = 65;
-    avgListingTime = 10;
+    basePrice = 45; // Increased from 35 for golf brands
+    sellThroughRate = 70; // Increased from 65
+    avgListingTime = 8; // Decreased from 10
     demandLevel = "High";
   } else if (logos.some(logo => ['polo', 'tommy', 'calvin klein', 'guess'].includes(logo.toLowerCase()))) {
     basePrice = 45;
@@ -141,8 +161,8 @@ function generateIntelligentMarketData(visionData, searchQueries) {
   
   // Category-based adjustments
   if (allContent.includes('golf')) {
-    basePrice += 15;
-    sellThroughRate += 10;
+    basePrice += 20; // Increased from 15
+    sellThroughRate += 15; // Increased from 10
     seasonality = "Spring/Summer peak";
   } else if (allContent.includes('basketball') || allContent.includes('sneaker')) {
     basePrice += 20;
@@ -482,16 +502,30 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     // Determine the best category name
     let category;
     if (logos.length > 0 && objects.length > 0) {
-      category = `${logos[0]} ${objects[0]}`;
+      // Remove duplicates and create clean category
+      const uniqueLogos = [...new Set(logos)];
+      const uniqueObjects = [...new Set(objects)];
+      category = `${uniqueLogos[0]} ${uniqueObjects[0]}`;
     } else if (logos.length > 0 && labels.length > 0) {
-      category = `${logos[0]} ${labels[0]}`;
+      const uniqueLogos = [...new Set(logos)];
+      const uniqueLabels = [...new Set(labels)];
+      category = `${uniqueLogos[0]} ${uniqueLabels[0]}`;
+    } else if (logos.length > 0) {
+      category = [...new Set(logos)][0];
     } else if (objects.length > 0) {
-      category = objects[0];
+      category = [...new Set(objects)][0];
     } else if (labels.length > 0) {
-      category = labels[0];
+      category = [...new Set(labels)][0];
     } else {
       category = 'Unknown Item';
     }
+
+    // Clean up the category name
+    category = category.replace(/\b\w+\b/g, word => 
+      word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+    );
+
+    console.log('🏷️ Final category determined:', category);
 
     // Calculate confidence based on detection scores
     const allDetections = [
@@ -545,7 +579,9 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
       confidence: response.confidence,
       searchQuery: response.searchQuery,
       source: response.source,
-      price: response.avgSoldPrice
+      avgSoldPrice: response.avgSoldPrice,
+      sellThroughRate: response.sellThroughRate,
+      demandLevel: response.demandLevel
     });
 
     res.json(response);
