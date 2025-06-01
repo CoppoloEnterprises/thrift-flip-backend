@@ -91,10 +91,17 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     let marketData = null;
     try {
       marketData = await searcheBayMarketData(searchTerms);
-      console.log('💰 Market analysis completed successfully');
+      console.log('💰 Market analysis completed successfully:', marketData);
     } catch (error) {
       console.error('❌ Market analysis error:', error.message);
       // Generate intelligent fallback
+      marketData = generateIntelligentEstimate(searchTerms);
+      console.log('💰 Using intelligent fallback:', marketData);
+    }
+
+    // Ensure we have valid market data
+    if (!marketData || !marketData.success) {
+      console.log('⚠️ No market data available, generating emergency fallback');
       marketData = generateIntelligentEstimate(searchTerms);
     }
 
@@ -127,7 +134,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
         dataPoints: marketData.dataPoints
       };
     } else {
-      // Final fallback to enhanced local data
+      // Emergency fallback to enhanced local data
       const fallbackData = getEnhancedFallbackData(category);
       finalResponse = {
         category,
@@ -137,14 +144,14 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
         avgListingTime: fallbackData.avgListingTime,
         demandLevel: fallbackData.demandLevel,
         seasonality: fallbackData.seasonality,
-        source: 'Fallback Data',
+        source: 'Emergency Fallback',
         detections: [...objects, ...labels],
         brands: logos.map(logo => logo.description),
         text: text.map(t => t.description).join(' ')
       };
     }
 
-    console.log('✅ Final result:', finalResponse);
+    console.log('✅ Final API response being sent:', finalResponse);
     res.json(finalResponse);
 
   } catch (error) {
