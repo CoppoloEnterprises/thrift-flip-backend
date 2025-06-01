@@ -182,29 +182,49 @@ function generateAdvancedMarketIntelligence(visionData) {
     }
   }
   
-  // Golf equipment detection
-  else if (allContent.includes('golf') || allContent.includes('titleist') || allContent.includes('callaway')) {
+  // Golf equipment detection - fix the detection logic
+  if (allContent.includes('golf') || allContent.includes('titleist') || allContent.includes('callaway') || 
+      allContent.includes('taylormade') || allContent.includes('ping')) {
+    
     if (allContent.includes('titleist')) {
       if (allContent.includes('driver')) {
         const data = BRAND_DATABASE.golf.titleist.driver;
-        analysis = { ...analysis, ...data, category: "Titleist Driver", confidence: "High" };
+        analysis = { ...analysis, basePrice: data.basePrice, sellThroughRate: data.sellRate, 
+                    avgListingTime: data.listTime, demandLevel: data.demand, 
+                    category: "Titleist Driver", confidence: "High" };
         matchFound = true;
       } else if (allContent.includes('iron')) {
         const data = BRAND_DATABASE.golf.titleist.iron_set;
-        analysis = { ...analysis, ...data, category: "Titleist Irons", confidence: "High" };
+        analysis = { ...analysis, basePrice: data.basePrice, sellThroughRate: data.sellRate, 
+                    avgListingTime: data.listTime, demandLevel: data.demand, 
+                    category: "Titleist Irons", confidence: "High" };
         matchFound = true;
-      } else if (allContent.includes('hat') || allContent.includes('cap')) {
+      } else if (allContent.includes('hat') || allContent.includes('cap') || allContent.includes('cricket cap') || allContent.includes('baseball cap')) {
         const data = BRAND_DATABASE.golf.titleist.hat;
-        analysis = { ...analysis, ...data, category: "Titleist Hat", confidence: "High" };
+        analysis = { ...analysis, basePrice: data.basePrice, sellThroughRate: data.sellRate, 
+                    avgListingTime: data.listTime, demandLevel: data.demand, 
+                    category: "Titleist Hat", confidence: "High" };
         matchFound = true;
+        console.log('🎯 Matched Titleist Hat from golf database!');
       } else if (allContent.includes('shoe')) {
         const data = BRAND_DATABASE.golf.titleist.shoes;
-        analysis = { ...analysis, ...data, category: "Titleist Golf Shoes", confidence: "High" };
+        analysis = { ...analysis, basePrice: data.basePrice, sellThroughRate: data.sellRate, 
+                    avgListingTime: data.listTime, demandLevel: data.demand, 
+                    category: "Titleist Golf Shoes", confidence: "High" };
+        matchFound = true;
+      } else {
+        // Generic Titleist item
+        const data = BRAND_DATABASE.golf.titleist.hat; // Default to hat data
+        analysis = { ...analysis, basePrice: data.basePrice, sellThroughRate: data.sellRate, 
+                    avgListingTime: data.listTime, demandLevel: data.demand, 
+                    category: "Titleist Golf Item", confidence: "Medium" };
         matchFound = true;
       }
     } else if (allContent.includes('callaway')) {
       const data = BRAND_DATABASE.golf.callaway.driver;
-      analysis = { ...analysis, ...data, category: "Callaway Golf Club", confidence: "High" };
+      analysis = { ...analysis, basePrice: data.basePrice, sellThroughRate: data.sellRate, 
+                  avgListingTime: data.listTime, demandLevel: data.demand, 
+                  category: "Callaway Golf Club", confidence: "High" };
       matchFound = true;
     }
   }
