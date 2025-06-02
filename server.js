@@ -23,17 +23,21 @@ const upload = multer({
 });
 
 // Helper function to get eBay OAuth token
+// Replace the getEbayAccessToken function in your server.js with this fixed version:
+
 async function getEbayAccessToken() {
   try {
     const credentials = Buffer.from(`${process.env.EBAY_CLIENT_ID}:${process.env.EBAY_CLIENT_SECRET}`).toString('base64');
     
+    // Fixed: Use the correct scope for Browse API
     const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Authorization': `Basic ${credentials}`
       },
-      body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope'
+      // FIXED: Changed to the correct scope
+      body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope/buy.product.feed'
     });
 
     const data = await response.json();
@@ -42,7 +46,27 @@ async function getEbayAccessToken() {
       return data.access_token;
     } else {
       console.error('❌ Failed to get eBay token:', data);
-      return null;
+      
+      // Try alternative scope if first one fails
+      console.log('🔄 Trying alternative scope...');
+      const altResponse = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${credentials}`
+        },
+        // Alternative scope for Browse API
+        body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope/buy.marketplace.insights'
+      });
+
+      const altData = await altResponse.json();
+      if (altData.access_token) {
+        console.log('✅ eBay OAuth token obtained with alternative scope');
+        return altData.access_token;
+      } else {
+        console.error('❌ Both eBay scopes failed:', altData);
+        return null;
+      }
     }
   } catch (error) {
     console.error('❌ eBay OAuth error:', error);
