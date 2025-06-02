@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const puppeteer = require('puppeteer');
 require('dotenv').config();
 
 const app = express();
@@ -22,273 +23,267 @@ const upload = multer({
   }
 });
 
-// Helper function to get eBay OAuth token
-// Replace the getEbayAccessToken function in your server.js with this fixed version:
-
-async function getEbayAccessToken() {
+// Enhanced eBay web scraper using Puppeteer
+async function scrapeEbaySoldListings(searchQuery) {
+  let browser = null;
+  
   try {
-    const credentials = Buffer.from(`${process.env.EBAY_CLIENT_ID}:${process.env.EBAY_CLIENT_SECRET}`).toString('base64');
+    console.log(`🕷️ Starting eBay scraping for: "${searchQuery}"`);
     
-    // Fixed: Use the correct scope for Browse API
-    const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${credentials}`
-      },
-      // FIXED: Changed to the correct scope
-      body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope/buy.product.feed'
+    // Launch Puppeteer with Railway-optimized settings
+    browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process'
+      ],
+      defaultViewport: { width: 1366, height: 768 }
     });
 
-    const data = await response.json();
-    if (data.access_token) {
-      console.log('✅ eBay OAuth token obtained');
-      return data.access_token;
-    } else {
-      console.error('❌ Failed to get eBay token:', data);
-      
-      // Try alternative scope if first one fails
-      console.log('🔄 Trying alternative scope...');
-      const altResponse = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': `Basic ${credentials}`
-        },
-        // Alternative scope for Browse API
-        body: 'grant_type=client_credentials&scope=https://api.ebayapis.com/oauth/api_scope/buy.marketplace.insights'
-      });
-
-      const altData = await altResponse.json();
-      if (altData.access_token) {
-        console.log('✅ eBay OAuth token obtained with alternative scope');
-        return altData.access_token;
-      } else {
-        console.error('❌ Both eBay scopes failed:', altData);
-        return null;
-      }
-    }
-  } catch (error) {
-    console.error('❌ eBay OAuth error:', error);
-    return null;
-  }
-}
-
-// Enhanced eBay search with multiple strategies
-async function searchEbaySoldListings(searchQuery, accessToken) {
-  try {
-    console.log(`🔍 Enhanced eBay search for: "${searchQuery}"`);
+    const page = await browser.newPage();
     
-    const searchUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search`;
+    // Set realistic user agent to avoid detection
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
-    // Multiple search strategies for better results
-    const searchStrategies = [
-      // Primary search - exact query
-      {
-        q: searchQuery.replace(/[^\w\s-]/g, '').trim(),
-        filter: 'conditionIds:{1000|1500|2000|2500|3000|4000|5000|6000},soldItems:true',
-        limit: '200',
-        sort: 'endTimeNewest',
-        fieldgroups: 'MATCHING_ITEMS,FULL'
-      },
-      // Secondary search - first 2 words
-      {
-        q: searchQuery.split(' ').slice(0, 2).join(' '),
-        filter: 'conditionIds:{1000|1500|2000|2500|3000|4000|5000|6000},soldItems:true',
-        limit: '150',
-        sort: 'endTimeNewest',
-        fieldgroups: 'MATCHING_ITEMS,FULL'
-      },
-      // Tertiary search - category-based
-      {
-        q: extractCategoryKeywords(searchQuery),
-        filter: 'conditionIds:{1000|1500|2000|2500|3000|4000|5000|6000},soldItems:true',
-        limit: '100',
-        sort: 'endTimeNewest',
-        fieldgroups: 'MATCHING_ITEMS,FULL'
-      }
-    ];
+    // Set additional headers
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+    });
 
-    for (let i = 0; i < searchStrategies.length; i++) {
-      const strategy = searchStrategies[i];
-      const params = new URLSearchParams(strategy);
+    // Create eBay sold listings URL
+    const encodedQuery = encodeURIComponent(searchQuery);
+    const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodedQuery}&LH_Sold=1&LH_Complete=1&_sop=13&_ipg=60`;
+    
+    console.log(`🌐 Navigating to: ${ebayUrl}`);
+    
+    // Navigate with timeout and wait for network idle
+    await page.goto(ebayUrl, { 
+      waitUntil: 'networkidle2', 
+      timeout: 30000 
+    });
+
+    // Wait for search results to load
+    await page.waitForSelector('.s-item', { timeout: 15000 });
+
+    // Extract sold listing data
+    const listingData = await page.evaluate(() => {
+      const listings = [];
+      const items = document.querySelectorAll('.s-item');
       
-      try {
-        const response = await fetch(`${searchUrl}?${params}`, {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
-            'Accept': 'application/json'
+      console.log(`Found ${items.length} items on page`);
+      
+      items.forEach((item, index) => {
+        try {
+          // Skip promoted/ad listings
+          if (item.querySelector('.s-item__badge--PROMOTED')) {
+            return;
           }
-        });
-
-        if (!response.ok) {
-          console.log(`⚠️ eBay API response ${response.status} for strategy ${i + 1}`);
-          continue;
+          
+          const titleElement = item.querySelector('.s-item__title');
+          const priceElement = item.querySelector('.s-item__price');
+          const shippingElement = item.querySelector('.s-item__shipping');
+          const soldDateElement = item.querySelector('.s-item__caption--signal');
+          const conditionElement = item.querySelector('.SECONDARY_INFO');
+          const linkElement = item.querySelector('.s-item__link');
+          
+          if (titleElement && priceElement && soldDateElement) {
+            const title = titleElement.textContent.trim();
+            
+            // Skip listings that are clearly not what we want
+            if (title.toLowerCase().includes('new listing') || 
+                title.toLowerCase().includes('sponsored') ||
+                title === '') {
+              return;
+            }
+            
+            const priceText = priceElement.textContent.trim();
+            const soldText = soldDateElement.textContent.trim();
+            
+            // Extract price - handle various formats
+            const priceMatch = priceText.match(/\$[\d,]+\.?\d*/);
+            if (priceMatch) {
+              const price = parseFloat(priceMatch[0].replace(/[$,]/g, ''));
+              
+              // Only include reasonable prices (filter out obvious errors)
+              if (price > 0.99 && price < 10000) {
+                const shipping = shippingElement ? shippingElement.textContent.trim() : '';
+                const condition = conditionElement ? conditionElement.textContent.trim() : '';
+                const link = linkElement ? linkElement.href : '';
+                
+                // Extract sold date info
+                const dateMatch = soldText.match(/Sold\s+(.+)/i);
+                const soldWhen = dateMatch ? dateMatch[1] : soldText;
+                
+                listings.push({
+                  title: title.substring(0, 100), // Limit title length
+                  price: price,
+                  shipping: shipping,
+                  condition: condition,
+                  soldDate: soldWhen,
+                  link: link,
+                  soldText: soldText
+                });
+              }
+            }
+          }
+        } catch (e) {
+          console.log(`Error parsing item ${index}:`, e.message);
         }
+      });
+      
+      return listings;
+    });
 
-        const data = await response.json();
-        
-        if (data.itemSummaries && data.itemSummaries.length >= 10) {
-          console.log(`✅ Found ${data.itemSummaries.length} sold listings on eBay (strategy ${i + 1})`);
-          return analyzeEbayData(data.itemSummaries, searchQuery);
-        } else {
-          console.log(`⚠️ Strategy ${i + 1} returned ${data.itemSummaries?.length || 0} results`);
-        }
-      } catch (strategyError) {
-        console.log(`❌ Strategy ${i + 1} failed:`, strategyError.message);
-        continue;
-      }
-    }
+    await browser.close();
     
-    console.log(`⚠️ All eBay search strategies failed for: ${searchQuery}`);
-    return null;
+    if (listingData.length > 0) {
+      console.log(`✅ Successfully scraped ${listingData.length} sold listings`);
+      return analyzeScrapeData(listingData, searchQuery);
+    } else {
+      console.log('⚠️ No sold listings found via scraping');
+      return null;
+    }
     
   } catch (error) {
-    console.error('❌ eBay search error:', error);
-    return null;
-  }
-}
-
-function extractCategoryKeywords(query) {
-  const categoryKeywords = {
-    'nike': 'nike sneakers shoes',
-    'adidas': 'adidas shoes athletic',
-    'jordan': 'air jordan basketball shoes',
-    'supreme': 'supreme streetwear',
-    'levi': 'levis jeans denim',
-    'shirt': 'clothing shirt apparel',
-    'jacket': 'outerwear jacket coat',
-    'watch': 'watches timepiece',
-    'bag': 'handbags purses bags',
-    'shoes': 'athletic shoes sneakers',
-    'vintage': 'vintage collectibles antique',
-    'dress': 'womens dress clothing',
-    'pants': 'pants trousers clothing'
-  };
-  
-  const lowerQuery = query.toLowerCase();
-  for (const [key, value] of Object.entries(categoryKeywords)) {
-    if (lowerQuery.includes(key)) {
-      return value;
-    }
-  }
-  
-  return query.split(' ').slice(0, 2).join(' '); // Return first 2 words as fallback
-}
-
-// Enhanced eBay data analysis
-function analyzeEbayData(listings, originalQuery) {
-  const prices = [];
-  const soldDates = [];
-  let totalListings = listings.length;
-  
-  // Extract price and date data with better filtering
-  listings.forEach(item => {
-    if (item.price && item.price.value) {
-      const price = parseFloat(item.price.value);
-      // Filter out obvious outliers (too high or too low)
-      if (price > 1 && price < 10000) {
-        prices.push(price);
+    console.error('❌ Scraping error:', error.message);
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (closeError) {
+        console.error('Error closing browser:', closeError.message);
       }
     }
-    if (item.itemEndDate) {
-      soldDates.push(new Date(item.itemEndDate));
-    }
-  });
-
-  if (prices.length === 0) {
     return null;
   }
-
-  // Better price analysis with outlier removal
-  const sortedPrices = [...prices].sort((a, b) => a - b);
-  const q1 = sortedPrices[Math.floor(sortedPrices.length * 0.25)];
-  const q3 = sortedPrices[Math.floor(sortedPrices.length * 0.75)];
-  const iqr = q3 - q1;
-  
-  // Remove outliers beyond 1.5 * IQR
-  const filteredPrices = sortedPrices.filter(price => 
-    price >= q1 - 1.5 * iqr && price <= q3 + 1.5 * iqr
-  );
-  
-  const avgPrice = Math.round(filteredPrices.reduce((sum, price) => sum + price, 0) / filteredPrices.length);
-  const medianPrice = Math.round(filteredPrices[Math.floor(filteredPrices.length / 2)]);
-  
-  // Use median for final price (more robust against outliers)
-  const finalPrice = medianPrice;
-
-  // Enhanced sell-through rate calculation
-  let sellThroughRate;
-  const queryLower = originalQuery.toLowerCase();
-  
-  // Base rate calculation
-  if (totalListings >= 50) {
-    sellThroughRate = Math.min(85, 65 + (totalListings - 50) * 0.5);
-  } else if (totalListings >= 25) {
-    sellThroughRate = 65 + (totalListings - 25) * 0.8;
-  } else if (totalListings >= 10) {
-    sellThroughRate = 50 + (totalListings - 10) * 1.0;
-  } else {
-    sellThroughRate = Math.max(30, totalListings * 4);
-  }
-
-  // Brand adjustments
-  const brandBoosts = {
-    'nike': 15, 'adidas': 12, 'jordan': 20, 'supreme': 25,
-    'patagonia': 15, 'levi': 10, 'vintage': -5, 'designer': 12
-  };
-  
-  for (const [brand, boost] of Object.entries(brandBoosts)) {
-    if (queryLower.includes(brand)) {
-      sellThroughRate = Math.min(90, sellThroughRate + boost);
-      break;
-    }
-  }
-
-  // Category adjustments
-  if (queryLower.includes('shoes') || queryLower.includes('sneakers')) {
-    sellThroughRate = Math.min(90, sellThroughRate + 10);
-  } else if (queryLower.includes('electronics')) {
-    sellThroughRate = Math.min(85, sellThroughRate + 5);
-  }
-
-  sellThroughRate = Math.round(Math.max(25, Math.min(90, sellThroughRate)));
-
-  // Calculate average listing time
-  const avgListingTime = Math.max(3, Math.min(45, Math.round(30 - (sellThroughRate - 40) / 3)));
-
-  // Determine demand level
-  let demandLevel;
-  if (sellThroughRate >= 80) demandLevel = "Very High";
-  else if (sellThroughRate >= 65) demandLevel = "High";
-  else if (sellThroughRate >= 45) demandLevel = "Medium";
-  else if (sellThroughRate >= 30) demandLevel = "Low";
-  else demandLevel = "Very Low";
-
-  // Enhanced seasonality detection
-  let seasonality = "Year-round";
-  if (queryLower.includes('coat') || queryLower.includes('jacket') || queryLower.includes('winter') || queryLower.includes('boots')) {
-    seasonality = "Fall/Winter peak";
-  } else if (queryLower.includes('swimsuit') || queryLower.includes('summer') || queryLower.includes('shorts') || queryLower.includes('sandals')) {
-    seasonality = "Spring/Summer peak";
-  } else if (queryLower.includes('halloween') || queryLower.includes('christmas') || queryLower.includes('holiday')) {
-    seasonality = "Holiday peak";
-  }
-
-  return {
-    avgSoldPrice: finalPrice,
-    sellThroughRate: sellThroughRate,
-    avgListingTime: avgListingTime,
-    demandLevel: demandLevel,
-    seasonality: seasonality,
-    totalSoldListings: totalListings,
-    priceRange: `$${Math.round(Math.min(...filteredPrices))} - $${Math.round(Math.max(...filteredPrices))}`,
-    confidence: Math.min(95, 60 + totalListings * 0.5) // Higher confidence with more data
-  };
 }
 
-// AI-powered market estimation as fallback
+// Enhanced analysis of scraped data
+function analyzeScrapeData(listings, originalQuery) {
+  try {
+    console.log(`📊 Analyzing ${listings.length} scraped listings`);
+    
+    const prices = listings.map(item => item.price).filter(price => price > 0);
+    
+    if (prices.length === 0) {
+      return null;
+    }
+
+    // Statistical analysis with outlier removal
+    const sortedPrices = [...prices].sort((a, b) => a - b);
+    const q1 = sortedPrices[Math.floor(sortedPrices.length * 0.25)];
+    const q3 = sortedPrices[Math.floor(sortedPrices.length * 0.75)];
+    const iqr = q3 - q1;
+    
+    // Remove extreme outliers
+    const filteredPrices = sortedPrices.filter(price => 
+      price >= q1 - 1.5 * iqr && price <= q3 + 1.5 * iqr
+    );
+    
+    const avgPrice = Math.round(filteredPrices.reduce((sum, price) => sum + price, 0) / filteredPrices.length);
+    const medianPrice = Math.round(filteredPrices[Math.floor(filteredPrices.length / 2)]);
+    
+    // Use median for more robust pricing
+    const finalPrice = medianPrice;
+    
+    // Analyze recency of sales for sell-through estimation
+    const recentSales = listings.filter(item => {
+      const soldText = item.soldText.toLowerCase();
+      return soldText.includes('hour') || 
+             soldText.includes('day') || 
+             (soldText.includes('week') && !soldText.includes('weeks'));
+    });
+    
+    const veryRecentSales = listings.filter(item => {
+      const soldText = item.soldText.toLowerCase();
+      return soldText.includes('hour') || soldText.includes('yesterday') || soldText.includes('today');
+    });
+
+    // Enhanced sell-through rate calculation
+    let sellThroughRate;
+    const totalListings = listings.length;
+    const recentRatio = recentSales.length / totalListings;
+    const veryRecentRatio = veryRecentSales.length / totalListings;
+    
+    // Base calculation on listing volume and recency
+    if (totalListings >= 20) {
+      sellThroughRate = Math.min(85, 50 + (recentRatio * 40) + (veryRecentRatio * 20));
+    } else if (totalListings >= 10) {
+      sellThroughRate = Math.min(80, 45 + (recentRatio * 35) + (veryRecentRatio * 15));
+    } else {
+      sellThroughRate = Math.max(30, 35 + (recentRatio * 30) + (veryRecentRatio * 10));
+    }
+
+    // Brand and category adjustments
+    const query = originalQuery.toLowerCase();
+    const brandBoosts = {
+      'nike': 15, 'adidas': 12, 'jordan': 20, 'supreme': 25,
+      'patagonia': 15, 'levi': 10, 'vintage': -5, 'designer': 12,
+      'apple': 10, 'sony': 8, 'canon': 8, 'rolex': 20
+    };
+    
+    for (const [brand, boost] of Object.entries(brandBoosts)) {
+      if (query.includes(brand)) {
+        sellThroughRate = Math.min(90, sellThroughRate + boost);
+        break;
+      }
+    }
+
+    sellThroughRate = Math.round(Math.max(25, Math.min(90, sellThroughRate)));
+
+    // Calculate average listing time based on sell-through rate
+    const avgListingTime = Math.max(3, Math.min(45, Math.round(35 - (sellThroughRate - 40) / 2)));
+
+    // Determine demand level
+    let demandLevel;
+    if (sellThroughRate >= 75) demandLevel = "Very High";
+    else if (sellThroughRate >= 60) demandLevel = "High";
+    else if (sellThroughRate >= 45) demandLevel = "Medium";
+    else if (sellThroughRate >= 30) demandLevel = "Low";
+    else demandLevel = "Very Low";
+
+    // Enhanced seasonality detection
+    let seasonality = "Year-round";
+    if (query.includes('coat') || query.includes('jacket') || query.includes('winter') || query.includes('boots')) {
+      seasonality = "Fall/Winter peak";
+    } else if (query.includes('swimsuit') || query.includes('summer') || query.includes('shorts') || query.includes('sandals')) {
+      seasonality = "Spring/Summer peak";
+    } else if (query.includes('halloween') || query.includes('christmas') || query.includes('holiday')) {
+      seasonality = "Holiday peak";
+    }
+
+    console.log(`📈 Analysis complete: $${finalPrice} avg, ${sellThroughRate}% sell-through`);
+
+    return {
+      avgSoldPrice: finalPrice,
+      sellThroughRate: sellThroughRate,
+      avgListingTime: avgListingTime,
+      demandLevel: demandLevel,
+      seasonality: seasonality,
+      totalSoldListings: totalListings,
+      priceRange: `$${Math.round(Math.min(...filteredPrices))} - $${Math.round(Math.max(...filteredPrices))}`,
+      confidence: Math.min(95, 70 + Math.min(25, totalListings)), // Higher confidence with more data
+      dataQuality: totalListings >= 15 ? 'High' : totalListings >= 8 ? 'Medium' : 'Low'
+    };
+    
+  } catch (error) {
+    console.error('❌ Error analyzing scraped data:', error);
+    return null;
+  }
+}
+
+// AI-powered market estimation (enhanced fallback)
 function generateAIMarketEstimate(searchQuery) {
   const query = searchQuery.toLowerCase();
   
@@ -302,7 +297,9 @@ function generateAIMarketEstimate(searchQuery) {
     'ralph lauren': { base: 35, multiplier: 1.5, demand: 'Medium', sellThrough: 60 },
     'patagonia': { base: 50, multiplier: 1.7, demand: 'High', sellThrough: 70 },
     'vintage': { base: 30, multiplier: 1.4, demand: 'Medium', sellThrough: 45 },
-    'designer': { base: 60, multiplier: 2.0, demand: 'High', sellThrough: 65 }
+    'designer': { base: 60, multiplier: 2.0, demand: 'High', sellThrough: 65 },
+    'apple': { base: 200, multiplier: 0.6, demand: 'High', sellThrough: 80 },
+    'rolex': { base: 2000, multiplier: 1.5, demand: 'Very High', sellThrough: 70 }
   };
   
   // Enhanced category-based estimates
@@ -315,7 +312,8 @@ function generateAIMarketEstimate(searchQuery) {
     'watch': { base: 60, sellThrough: 40, listingTime: 25 },
     'bag': { base: 35, sellThrough: 60, listingTime: 14 },
     'pants': { base: 25, sellThrough: 50, listingTime: 16 },
-    'electronics': { base: 50, sellThrough: 65, listingTime: 12 }
+    'electronics': { base: 50, sellThrough: 65, listingTime: 12 },
+    'collectible': { base: 40, sellThrough: 35, listingTime: 30 }
   };
   
   let estimation = { 
@@ -344,8 +342,8 @@ function generateAIMarketEstimate(searchQuery) {
     }
   }
   
-  // Add some realistic variation
-  const variationFactor = 0.8 + Math.random() * 0.4; // ±20% variation
+  // Add realistic variation
+  const variationFactor = 0.85 + Math.random() * 0.3; // ±15% variation
   const finalPrice = Math.round(estimation.base * estimation.multiplier * variationFactor);
   
   return {
@@ -354,36 +352,29 @@ function generateAIMarketEstimate(searchQuery) {
     avgListingTime: Math.max(3, Math.min(30, estimation.listingTime)),
     demandLevel: estimation.demand,
     seasonality: query.includes('winter') || query.includes('summer') ? 'Seasonal' : 'Year-round',
-    totalSoldListings: Math.round(20 + Math.random() * 30), // Simulated count
-    priceRange: `$${Math.round(finalPrice * 0.6)} - $${Math.round(finalPrice * 1.4)}`,
-    confidence: 60
+    totalSoldListings: Math.round(15 + Math.random() * 25), // Simulated count
+    priceRange: `$${Math.round(finalPrice * 0.7)} - $${Math.round(finalPrice * 1.4)}`,
+    confidence: 65
   };
 }
 
-// Hybrid market data collection
-async function getMarketData(searchQuery, accessToken) {
-  console.log(`🔍 Getting comprehensive market data for: "${searchQuery}"`);
+// Hybrid market data collection with web scraping priority
+async function getMarketData(searchQuery) {
+  console.log(`🔍 Getting market data for: "${searchQuery}"`);
   
-  // Try eBay API first (most accurate)
+  // Try web scraping first (most accurate and current)
   try {
-    const ebayResult = await searchEbaySoldListings(searchQuery, accessToken);
-    if (ebayResult && ebayResult.totalSoldListings >= 10) {
-      console.log('✅ Using eBay API data (high confidence)');
+    const scrapedResult = await scrapeEbaySoldListings(searchQuery);
+    if (scrapedResult && scrapedResult.totalSoldListings >= 3) {
+      console.log('✅ Using web scraped eBay data (high accuracy)');
       return { 
-        ...ebayResult, 
-        source: 'eBay Browse API',
-        confidence: Math.min(95, ebayResult.confidence || 85)
-      };
-    } else if (ebayResult && ebayResult.totalSoldListings >= 5) {
-      console.log('✅ Using eBay API data (medium confidence)');
-      return { 
-        ...ebayResult, 
-        source: 'eBay Browse API',
-        confidence: Math.min(80, ebayResult.confidence || 70)
+        ...scrapedResult, 
+        source: 'eBay Web Scraping',
+        confidence: scrapedResult.confidence || 85
       };
     }
   } catch (error) {
-    console.log('⚠️ eBay API failed:', error.message);
+    console.log('⚠️ Web scraping failed:', error.message);
   }
   
   // Fallback to AI estimation
@@ -405,11 +396,11 @@ function createSmartSearchQueries(visionData) {
   const logos = visionData.logos || [];
   const text = visionData.text || '';
 
-  console.log('🔍 Creating smart search queries from vision data:');
+  console.log('🔍 Creating smart search queries from vision data');
   
   // Extract text-based brands and models
   const textWords = text.toLowerCase().split(/\s+/).filter(word => word.length > 2);
-  const brandKeywords = ['nike', 'adidas', 'jordan', 'supreme', 'levi', 'calvin', 'tommy', 'polo', 'patagonia'];
+  const brandKeywords = ['nike', 'adidas', 'jordan', 'supreme', 'levi', 'calvin', 'tommy', 'polo', 'patagonia', 'apple', 'sony', 'canon'];
   const detectedBrands = textWords.filter(word => 
     brandKeywords.some(brand => word.includes(brand) || brand.includes(word))
   );
@@ -458,17 +449,17 @@ function createSmartSearchQueries(visionData) {
   // Clean and deduplicate queries
   const cleanQueries = [...new Set(queries)]
     .map(q => q.replace(/[^\w\s-]/g, '').trim())
-    .filter(q => q.length > 2 && q.split(' ').length <= 4) // Reasonable length
-    .slice(0, 6); // Top 6 queries
+    .filter(q => q.length > 2 && q.split(' ').length <= 4)
+    .slice(0, 5); // Top 5 queries
 
-  console.log('🎯 Generated smart search queries:', cleanQueries);
+  console.log('🎯 Generated search queries:', cleanQueries);
   return cleanQueries.length > 0 ? cleanQueries : ['vintage collectible'];
 }
 
 // Enhanced image analysis endpoint
 app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
   try {
-    console.log('📸 Received image for enhanced analysis');
+    console.log('📸 Received image for enhanced scraping analysis');
     
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
@@ -476,7 +467,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
 
     // Convert image to base64
     const base64Image = req.file.buffer.toString('base64');
-    console.log('🔄 Converting image and calling Google Vision API...');
+    console.log('🔄 Processing with Google Vision API...');
 
     // Enhanced Google Vision API request
     const visionRequest = {
@@ -489,8 +480,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
             { type: 'OBJECT_LOCALIZATION', maxResults: 15 },
             { type: 'LABEL_DETECTION', maxResults: 20 },
             { type: 'TEXT_DETECTION', maxResults: 15 },
-            { type: 'LOGO_DETECTION', maxResults: 15 },
-            { type: 'PRODUCT_SEARCH', maxResults: 10 }
+            { type: 'LOGO_DETECTION', maxResults: 15 }
           ]
         }
       ]
@@ -528,11 +518,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     const textDetections = annotations.textAnnotations || [];
     const fullText = textDetections.map(t => t.description).join(' ');
 
-    console.log('🔍 Enhanced Google Vision detected:');
-    console.log('Objects:', objects);
-    console.log('Labels:', labels);
-    console.log('Logos:', logos);
-    console.log('Text:', fullText.substring(0, 100) + '...');
+    console.log('🔍 Google Vision detected:', { objects, labels, logos });
 
     // Create structured vision data
     const structuredVisionData = {
@@ -545,22 +531,15 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     // Generate smart search queries
     const searchQueries = createSmartSearchQueries(structuredVisionData);
 
-    // Get eBay access token
-    const accessToken = await getEbayAccessToken();
-    
-    if (!accessToken) {
-      console.log('⚠️ eBay authentication failed, using AI estimation');
-    }
-
-    // Get comprehensive market data
+    // Get comprehensive market data with web scraping
     let marketData = null;
     let usedQuery = '';
     
     for (const query of searchQueries) {
       console.log(`🔍 Trying market analysis with: "${query}"`);
-      marketData = await getMarketData(query, accessToken);
+      marketData = await getMarketData(query);
       
-      if (marketData && (marketData.totalSoldListings >= 5 || marketData.source === 'AI Market Analysis')) {
+      if (marketData && (marketData.totalSoldListings >= 3 || marketData.source === 'AI Market Analysis')) {
         usedQuery = query;
         console.log(`✅ Market data found with query: "${query}" (${marketData.source})`);
         break;
@@ -571,7 +550,7 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     if (!marketData) {
       const fallbackQuery = objects[0] || labels[0] || 'general merchandise';
       console.log(`🔍 Using fallback query: "${fallbackQuery}"`);
-      marketData = await getMarketData(fallbackQuery, accessToken);
+      marketData = await getMarketData(fallbackQuery);
       usedQuery = fallbackQuery;
     }
 
@@ -609,100 +588,3 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
       confidence: overallConfidence,
       visionConfidence: visionConfidence,
       marketConfidence: marketData?.confidence || 50,
-      searchQuery: usedQuery,
-      detections: {
-        objects,
-        labels,
-        logos,
-        text: fullText
-      },
-      ...marketData
-    };
-
-    console.log('✅ Enhanced analysis complete:', {
-      category: response.category,
-      confidence: response.confidence,
-      searchQuery: response.searchQuery,
-      source: response.source,
-      price: response.avgSoldPrice
-    });
-
-    res.json(response);
-
-  } catch (error) {
-    console.error('❌ Error in enhanced image analysis:', error);
-    res.status(500).json({ error: 'Failed to analyze image: ' + error.message });
-  }
-});
-
-// Enhanced health check endpoint
-app.get('/api/health', async (req, res) => {
-  const health = {
-    status: 'Server is running!',
-    timestamp: new Date().toISOString(),
-    apis: {
-      googleVision: !!process.env.GOOGLE_VISION_API_KEY,
-      ebayClientId: !!process.env.EBAY_CLIENT_ID,
-      ebayClientSecret: !!process.env.EBAY_CLIENT_SECRET
-    },
-    connectivity: {
-      ebayOAuth: false,
-      googleVision: false
-    }
-  };
-
-  // Test eBay connectivity
-  try {
-    const token = await getEbayAccessToken();
-    health.connectivity.ebayOAuth = !!token;
-  } catch (error) {
-    health.connectivity.ebayOAuth = false;
-  }
-
-  // Test Google Vision (lightweight test)
-  try {
-    if (process.env.GOOGLE_VISION_API_KEY) {
-      health.connectivity.googleVision = true;
-    }
-  } catch (error) {
-    health.connectivity.googleVision = false;
-  }
-
-  res.json(health);
-});
-
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'Enhanced Thrift Flip Analyzer Backend Server',
-    version: '2.0.0',
-    features: [
-      'Google Vision AI Integration',
-      'eBay Browse API with Fallback',
-      'AI Market Analysis',
-      'Smart Search Query Generation',
-      'Multi-Strategy Data Collection'
-    ],
-    endpoints: {
-      health: '/api/health',
-      analyze: '/api/analyze-image (POST)'
-    }
-  });
-});
-
-app.listen(PORT, () => {
-  console.log('🚀 Enhanced Thrift Flip Backend Server Started!');
-  console.log(`📡 Server running on http://localhost:${PORT}`);
-  console.log('🔑 Google Vision API key:', !!process.env.GOOGLE_VISION_API_KEY ? '✅ loaded' : '❌ missing');
-  console.log('🔑 eBay Client ID:', !!process.env.EBAY_CLIENT_ID ? '✅ loaded' : '❌ missing');
-  console.log('🔑 eBay Client Secret:', !!process.env.EBAY_CLIENT_SECRET ? '✅ loaded' : '❌ missing');
-  console.log('📱 Ready for enhanced AI-powered thrift analysis!');
-  console.log('\n📋 Available endpoints:');
-  console.log(`   Health check: http://localhost:${PORT}/api/health`);
-  console.log(`   Image analysis: http://localhost:${PORT}/api/analyze-image`);
-  console.log('\n🎯 Features:');
-  console.log('   ✅ Enhanced Google Vision AI');
-  console.log('   ✅ Multi-strategy eBay data collection');
-  console.log('   ✅ AI-powered market estimation');
-  console.log('   ✅ Smart search query generation');
-});
