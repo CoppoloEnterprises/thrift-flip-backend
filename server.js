@@ -2,7 +2,8 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const puppeteer = require('puppeteer');
+const cheerio = require('cheerio');
+const UserAgent = require('user-agents');
 require('dotenv').config();
 
 const app = express();
@@ -23,148 +24,116 @@ const upload = multer({
   }
 });
 
-// Enhanced eBay web scraper using Puppeteer
+// Lightweight eBay scraper using Cheerio and fetch
 async function scrapeEbaySoldListings(searchQuery) {
-  let browser = null;
-  
   try {
-    console.log(`🕷️ Starting eBay scraping for: "${searchQuery}"`);
+    console.log(`🕷️ Starting lightweight eBay scraping for: "${searchQuery}"`);
     
-    // Launch Puppeteer with Railway-optimized settings
-    browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-web-security',
-        '--disable-features=VizDisplayCompositor',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process'
-      ],
-      defaultViewport: { width: 1366, height: 768 }
-    });
-
-    const page = await browser.newPage();
-    
-    // Set realistic user agent to avoid detection
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    
-    // Set additional headers
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
-    });
-
     // Create eBay sold listings URL
     const encodedQuery = encodeURIComponent(searchQuery);
     const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodedQuery}&LH_Sold=1&LH_Complete=1&_sop=13&_ipg=60`;
     
-    console.log(`🌐 Navigating to: ${ebayUrl}`);
+    console.log(`🌐 Fetching: ${ebayUrl}`);
     
-    // Navigate with timeout and wait for network idle
-    await page.goto(ebayUrl, { 
-      waitUntil: 'networkidle2', 
-      timeout: 30000 
+    // Generate random user agent
+    const userAgent = new UserAgent();
+    
+    // Fetch the page with realistic headers
+    const response = await fetch(ebayUrl, {
+      headers: {
+        'User-Agent': userAgent.toString(),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0'
+      },
+      timeout: 15000
     });
 
-    // Wait for search results to load
-    await page.waitForSelector('.s-item', { timeout: 15000 });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
 
-    // Extract sold listing data
-    const listingData = await page.evaluate(() => {
-      const listings = [];
-      const items = document.querySelectorAll('.s-item');
-      
-      console.log(`Found ${items.length} items on page`);
-      
-      items.forEach((item, index) => {
-        try {
-          // Skip promoted/ad listings
-          if (item.querySelector('.s-item__badge--PROMOTED')) {
-            return;
-          }
-          
-          const titleElement = item.querySelector('.s-item__title');
-          const priceElement = item.querySelector('.s-item__price');
-          const shippingElement = item.querySelector('.s-item__shipping');
-          const soldDateElement = item.querySelector('.s-item__caption--signal');
-          const conditionElement = item.querySelector('.SECONDARY_INFO');
-          const linkElement = item.querySelector('.s-item__link');
-          
-          if (titleElement && priceElement && soldDateElement) {
-            const title = titleElement.textContent.trim();
-            
-            // Skip listings that are clearly not what we want
-            if (title.toLowerCase().includes('new listing') || 
-                title.toLowerCase().includes('sponsored') ||
-                title === '') {
-              return;
-            }
-            
-            const priceText = priceElement.textContent.trim();
-            const soldText = soldDateElement.textContent.trim();
-            
-            // Extract price - handle various formats
-            const priceMatch = priceText.match(/\$[\d,]+\.?\d*/);
-            if (priceMatch) {
-              const price = parseFloat(priceMatch[0].replace(/[$,]/g, ''));
-              
-              // Only include reasonable prices (filter out obvious errors)
-              if (price > 0.99 && price < 10000) {
-                const shipping = shippingElement ? shippingElement.textContent.trim() : '';
-                const condition = conditionElement ? conditionElement.textContent.trim() : '';
-                const link = linkElement ? linkElement.href : '';
-                
-                // Extract sold date info
-                const dateMatch = soldText.match(/Sold\s+(.+)/i);
-                const soldWhen = dateMatch ? dateMatch[1] : soldText;
-                
-                listings.push({
-                  title: title.substring(0, 100), // Limit title length
-                  price: price,
-                  shipping: shipping,
-                  condition: condition,
-                  soldDate: soldWhen,
-                  link: link,
-                  soldText: soldText
-                });
-              }
-            }
-          }
-        } catch (e) {
-          console.log(`Error parsing item ${index}:`, e.message);
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    
+    console.log('📄 HTML loaded, parsing listings...');
+    
+    const listings = [];
+    
+    // Parse eBay search results
+    $('.s-item').each((index, element) => {
+      try {
+        const $item = $(element);
+        
+        // Skip promoted/ad listings
+        if ($item.find('.s-item__badge--PROMOTED').length > 0) {
+          return;
         }
-      });
-      
-      return listings;
+        
+        const title = $item.find('.s-item__title').text().trim();
+        const priceText = $item.find('.s-item__price').text().trim();
+        const soldText = $item.find('.s-item__caption--signal').text().trim();
+        const shipping = $item.find('.s-item__shipping').text().trim();
+        const condition = $item.find('.SECONDARY_INFO').text().trim();
+        const link = $item.find('.s-item__link').attr('href');
+        
+        // Skip if essential data is missing
+        if (!title || !priceText || !soldText) {
+          return;
+        }
+        
+        // Skip non-product listings
+        if (title.toLowerCase().includes('new listing') || 
+            title.toLowerCase().includes('sponsored') ||
+            title === '' ||
+            title.length < 5) {
+          return;
+        }
+        
+        // Extract price - handle various formats
+        const priceMatch = priceText.match(/\$[\d,]+\.?\d*/);
+        if (priceMatch) {
+          const price = parseFloat(priceMatch[0].replace(/[$,]/g, ''));
+          
+          // Only include reasonable prices
+          if (price > 0.99 && price < 10000) {
+            // Extract sold date info
+            const dateMatch = soldText.match(/Sold\s+(.+)/i);
+            const soldWhen = dateMatch ? dateMatch[1] : soldText;
+            
+            listings.push({
+              title: title.substring(0, 100),
+              price: price,
+              shipping: shipping,
+              condition: condition,
+              soldDate: soldWhen,
+              link: link,
+              soldText: soldText
+            });
+          }
+        }
+      } catch (e) {
+        console.log(`Error parsing item ${index}:`, e.message);
+      }
     });
-
-    await browser.close();
     
-    if (listingData.length > 0) {
-      console.log(`✅ Successfully scraped ${listingData.length} sold listings`);
-      return analyzeScrapeData(listingData, searchQuery);
+    if (listings.length > 0) {
+      console.log(`✅ Successfully scraped ${listings.length} sold listings`);
+      return analyzeScrapeData(listings, searchQuery);
     } else {
-      console.log('⚠️ No sold listings found via scraping');
+      console.log('⚠️ No sold listings found via lightweight scraping');
       return null;
     }
     
   } catch (error) {
-    console.error('❌ Scraping error:', error.message);
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (closeError) {
-        console.error('Error closing browser:', closeError.message);
-      }
-    }
+    console.error('❌ Lightweight scraping error:', error.message);
     return null;
   }
 }
@@ -218,11 +187,11 @@ function analyzeScrapeData(listings, originalQuery) {
     
     // Base calculation on listing volume and recency
     if (totalListings >= 20) {
-      sellThroughRate = Math.min(85, 50 + (recentRatio * 40) + (veryRecentRatio * 20));
+      sellThroughRate = Math.min(85, 55 + (recentRatio * 35) + (veryRecentRatio * 15));
     } else if (totalListings >= 10) {
-      sellThroughRate = Math.min(80, 45 + (recentRatio * 35) + (veryRecentRatio * 15));
+      sellThroughRate = Math.min(80, 50 + (recentRatio * 30) + (veryRecentRatio * 12));
     } else {
-      sellThroughRate = Math.max(30, 35 + (recentRatio * 30) + (veryRecentRatio * 10));
+      sellThroughRate = Math.max(35, 40 + (recentRatio * 25) + (veryRecentRatio * 10));
     }
 
     // Brand and category adjustments
@@ -240,10 +209,10 @@ function analyzeScrapeData(listings, originalQuery) {
       }
     }
 
-    sellThroughRate = Math.round(Math.max(25, Math.min(90, sellThroughRate)));
+    sellThroughRate = Math.round(Math.max(30, Math.min(90, sellThroughRate)));
 
     // Calculate average listing time based on sell-through rate
-    const avgListingTime = Math.max(3, Math.min(45, Math.round(35 - (sellThroughRate - 40) / 2)));
+    const avgListingTime = Math.max(3, Math.min(45, Math.round(30 - (sellThroughRate - 45) / 2)));
 
     // Determine demand level
     let demandLevel;
@@ -273,7 +242,7 @@ function analyzeScrapeData(listings, originalQuery) {
       seasonality: seasonality,
       totalSoldListings: totalListings,
       priceRange: `$${Math.round(Math.min(...filteredPrices))} - $${Math.round(Math.max(...filteredPrices))}`,
-      confidence: Math.min(95, 70 + Math.min(25, totalListings)), // Higher confidence with more data
+      confidence: Math.min(90, 65 + Math.min(20, totalListings)), // Higher confidence with more data
       dataQuality: totalListings >= 15 ? 'High' : totalListings >= 8 ? 'Medium' : 'Low'
     };
     
@@ -283,7 +252,7 @@ function analyzeScrapeData(listings, originalQuery) {
   }
 }
 
-// AI-powered market estimation (enhanced fallback)
+// Enhanced AI-powered market estimation (fallback)
 function generateAIMarketEstimate(searchQuery) {
   const query = searchQuery.toLowerCase();
   
@@ -352,37 +321,37 @@ function generateAIMarketEstimate(searchQuery) {
     avgListingTime: Math.max(3, Math.min(30, estimation.listingTime)),
     demandLevel: estimation.demand,
     seasonality: query.includes('winter') || query.includes('summer') ? 'Seasonal' : 'Year-round',
-    totalSoldListings: Math.round(15 + Math.random() * 25), // Simulated count
+    totalSoldListings: Math.round(12 + Math.random() * 20), // Simulated count
     priceRange: `$${Math.round(finalPrice * 0.7)} - $${Math.round(finalPrice * 1.4)}`,
-    confidence: 65
+    confidence: 70
   };
 }
 
-// Hybrid market data collection with web scraping priority
+// Hybrid market data collection with lightweight scraping priority
 async function getMarketData(searchQuery) {
   console.log(`🔍 Getting market data for: "${searchQuery}"`);
   
-  // Try web scraping first (most accurate and current)
+  // Try lightweight web scraping first
   try {
     const scrapedResult = await scrapeEbaySoldListings(searchQuery);
     if (scrapedResult && scrapedResult.totalSoldListings >= 3) {
-      console.log('✅ Using web scraped eBay data (high accuracy)');
+      console.log('✅ Using lightweight scraped eBay data (high accuracy)');
       return { 
         ...scrapedResult, 
-        source: 'eBay Web Scraping',
-        confidence: scrapedResult.confidence || 85
+        source: 'eBay Lightweight Scraping',
+        confidence: scrapedResult.confidence || 80
       };
     }
   } catch (error) {
-    console.log('⚠️ Web scraping failed:', error.message);
+    console.log('⚠️ Lightweight scraping failed:', error.message);
   }
   
-  // Fallback to AI estimation
-  console.log('✅ Using AI market estimation');
+  // Fallback to enhanced AI estimation
+  console.log('✅ Using enhanced AI market estimation');
   const aiEstimate = generateAIMarketEstimate(searchQuery);
   return { 
     ...aiEstimate, 
-    source: 'AI Market Analysis',
+    source: 'Enhanced AI Analysis',
     confidence: aiEstimate.confidence
   };
 }
@@ -459,7 +428,7 @@ function createSmartSearchQueries(visionData) {
 // Enhanced image analysis endpoint
 app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
   try {
-    console.log('📸 Received image for enhanced scraping analysis');
+    console.log('📸 Received image for lightweight scraping analysis');
     
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
@@ -501,90 +470,4 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     
     if (visionData.error) {
       console.error('❌ Google Vision API error:', visionData.error.message);
-      return res.status(400).json({ error: visionData.error.message });
-    }
-
-    // Process enhanced Google Vision results
-    const annotations = visionData.responses[0];
-    const objects = (annotations.localizedObjectAnnotations || [])
-      .filter(o => o.score > 0.5)
-      .map(o => o.name);
-    const labels = (annotations.labelAnnotations || [])
-      .filter(l => l.score > 0.6)
-      .map(l => l.description);
-    const logos = (annotations.logoAnnotations || [])
-      .filter(l => l.score > 0.5)
-      .map(l => l.description);
-    const textDetections = annotations.textAnnotations || [];
-    const fullText = textDetections.map(t => t.description).join(' ');
-
-    console.log('🔍 Google Vision detected:', { objects, labels, logos });
-
-    // Create structured vision data
-    const structuredVisionData = {
-      objects,
-      labels,
-      logos,
-      text: fullText
-    };
-
-    // Generate smart search queries
-    const searchQueries = createSmartSearchQueries(structuredVisionData);
-
-    // Get comprehensive market data with web scraping
-    let marketData = null;
-    let usedQuery = '';
-    
-    for (const query of searchQueries) {
-      console.log(`🔍 Trying market analysis with: "${query}"`);
-      marketData = await getMarketData(query);
-      
-      if (marketData && (marketData.totalSoldListings >= 3 || marketData.source === 'AI Market Analysis')) {
-        usedQuery = query;
-        console.log(`✅ Market data found with query: "${query}" (${marketData.source})`);
-        break;
-      }
-    }
-
-    // Final fallback
-    if (!marketData) {
-      const fallbackQuery = objects[0] || labels[0] || 'general merchandise';
-      console.log(`🔍 Using fallback query: "${fallbackQuery}"`);
-      marketData = await getMarketData(fallbackQuery);
-      usedQuery = fallbackQuery;
-    }
-
-    // Determine best category name
-    let category;
-    if (logos.length > 0 && objects.length > 0) {
-      category = `${logos[0]} ${objects[0]}`;
-    } else if (logos.length > 0 && labels.length > 0) {
-      category = `${logos[0]} ${labels[0]}`;
-    } else if (objects.length > 0) {
-      category = objects[0];
-    } else if (labels.length > 0) {
-      category = labels[0];
-    } else {
-      category = 'Unknown Item';
-    }
-
-    // Calculate confidence based on detection quality
-    const allDetections = [
-      ...(annotations.localizedObjectAnnotations || []),
-      ...(annotations.labelAnnotations || []),
-      ...(annotations.logoAnnotations || [])
-    ];
-    
-    const avgDetectionConfidence = allDetections.length > 0 
-      ? allDetections.reduce((sum, det) => sum + (det.score || 0), 0) / allDetections.length 
-      : 0;
-    
-    const visionConfidence = Math.round(avgDetectionConfidence * 100);
-    const overallConfidence = Math.round((visionConfidence + (marketData?.confidence || 50)) / 2);
-
-    // Prepare comprehensive response
-    const response = {
-      category: category,
-      confidence: overallConfidence,
-      visionConfidence: visionConfidence,
-      marketConfidence: marketData?.confidence || 50,
+      return res.status(400).json({ error: visionData.erro
