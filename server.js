@@ -470,4 +470,181 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     
     if (visionData.error) {
       console.error('❌ Google Vision API error:', visionData.error.message);
-      return res.status(400).json({ error: visionData.erro
+      return res.status(400).json({ error: visionData.error.message });
+    }
+
+    // Process enhanced Google Vision results
+    const annotations = visionData.responses[0];
+    const objects = (annotations.localizedObjectAnnotations || [])
+      .filter(o => o.score > 0.5)
+      .map(o => o.name);
+    const labels = (annotations.labelAnnotations || [])
+      .filter(l => l.score > 0.6)
+      .map(l => l.description);
+    const logos = (annotations.logoAnnotations || [])
+      .filter(l => l.score > 0.5)
+      .map(l => l.description);
+    const textDetections = annotations.textAnnotations || [];
+    const fullText = textDetections.map(t => t.description).join(' ');
+
+    console.log('🔍 Google Vision detected:', { objects, labels, logos });
+
+    // Create structured vision data
+    const structuredVisionData = {
+      objects,
+      labels,
+      logos,
+      text: fullText
+    };
+
+    // Generate smart search queries
+    const searchQueries = createSmartSearchQueries(structuredVisionData);
+
+    // Get comprehensive market data with lightweight scraping
+    let marketData = null;
+    let usedQuery = '';
+    
+    for (const query of searchQueries) {
+      console.log(`🔍 Trying market analysis with: "${query}"`);
+      marketData = await getMarketData(query);
+      
+      if (marketData && (marketData.totalSoldListings >= 3 || marketData.source === 'Enhanced AI Analysis')) {
+        usedQuery = query;
+        console.log(`✅ Market data found with query: "${query}" (${marketData.source})`);
+        break;
+      }
+    }
+
+    // Final fallback
+    if (!marketData) {
+      const fallbackQuery = objects[0] || labels[0] || 'general merchandise';
+      console.log(`🔍 Using fallback query: "${fallbackQuery}"`);
+      marketData = await getMarketData(fallbackQuery);
+      usedQuery = fallbackQuery;
+    }
+
+    // Determine best category name
+    let category;
+    if (logos.length > 0 && objects.length > 0) {
+      category = `${logos[0]} ${objects[0]}`;
+    } else if (logos.length > 0 && labels.length > 0) {
+      category = `${logos[0]} ${labels[0]}`;
+    } else if (objects.length > 0) {
+      category = objects[0];
+    } else if (labels.length > 0) {
+      category = labels[0];
+    } else {
+      category = 'Unknown Item';
+    }
+
+    // Calculate confidence based on detection quality
+    const allDetections = [
+      ...(annotations.localizedObjectAnnotations || []),
+      ...(annotations.labelAnnotations || []),
+      ...(annotations.logoAnnotations || [])
+    ];
+    
+    const avgDetectionConfidence = allDetections.length > 0 
+      ? allDetections.reduce((sum, det) => sum + (det.score || 0), 0) / allDetections.length 
+      : 0;
+    
+    const visionConfidence = Math.round(avgDetectionConfidence * 100);
+    const overallConfidence = Math.round((visionConfidence + (marketData?.confidence || 50)) / 2);
+
+    // Prepare comprehensive response
+    const response = {
+      category: category,
+      confidence: overallConfidence,
+      visionConfidence: visionConfidence,
+      marketConfidence: marketData?.confidence || 50,
+      searchQuery: usedQuery,
+      detections: {
+        objects,
+        labels,
+        logos,
+        text: fullText
+      },
+      ...marketData
+    };
+
+    console.log('✅ Enhanced lightweight analysis complete:', {
+      category: response.category,
+      confidence: response.confidence,
+      searchQuery: response.searchQuery,
+      source: response.source,
+      price: response.avgSoldPrice
+    });
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('❌ Error in enhanced lightweight analysis:', error);
+    res.status(500).json({ error: 'Failed to analyze image: ' + error.message });
+  }
+});
+
+// Enhanced health check endpoint
+app.get('/api/health', async (req, res) => {
+  const health = {
+    status: 'Enhanced Server with Lightweight Scraping is running!',
+    timestamp: new Date().toISOString(),
+    apis: {
+      googleVision: !!process.env.GOOGLE_VISION_API_KEY,
+      lightweightScraping: true,
+      cheerio: true
+    },
+    connectivity: {
+      googleVision: !!process.env.GOOGLE_VISION_API_KEY,
+      ebayOAuth: false, // Not needed with scraping
+      lightweightScraping: true
+    },
+    features: [
+      'Google Vision AI',
+      'Lightweight eBay Scraping',
+      'Enhanced AI Market Analysis',
+      'Smart Search Queries',
+      'Real-time Sold Listings'
+    ]
+  };
+
+  res.json(health);
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Enhanced Thrift Flip Analyzer with Lightweight Scraping',
+    version: '2.1.1',
+    features: [
+      'Google Vision AI Integration',
+      'Lightweight eBay Scraping with Cheerio',
+      'Enhanced AI Market Analysis Fallback',
+      'Smart Search Query Generation',
+      'Real-time Sold Listings Data',
+      'Fast & Reliable Deployment'
+    ],
+    endpoints: {
+      health: '/api/health',
+      analyze: '/api/analyze-image (POST)'
+    }
+  });
+});
+
+app.listen(PORT, () => {
+  console.log('🚀 Enhanced Thrift Flip Backend with Lightweight Scraping Started!');
+  console.log(`📡 Server running on http://localhost:${PORT}`);
+  console.log('🔑 Google Vision API key:', !!process.env.GOOGLE_VISION_API_KEY ? '✅ loaded' : '❌ missing');
+  console.log('🕷️ Lightweight web scraping: ✅ enabled');
+  console.log('📱 Ready for fast, reliable analysis!');
+  console.log('\n📋 Available endpoints:');
+  console.log(`   Health check: http://localhost:${PORT}/api/health`);
+  console.log(`   Image analysis: http://localhost:${PORT}/api/analyze-image`);
+  console.log('\n🎯 Enhanced Features:');
+  console.log('   ✅ Google Vision AI for item identification');
+  console.log('   ✅ Lightweight Cheerio scraping for real eBay data');
+  console.log('   ✅ Enhanced AI market analysis fallback');
+  console.log('   ✅ Smart search query generation');
+  console.log('   ✅ Statistical price analysis with outlier removal');
+  console.log('   ✅ Fast deployment without heavy dependencies');
+  console.log('\n🚀 Ready to analyze thrift finds with lightweight scraping!');
+});
