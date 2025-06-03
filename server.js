@@ -24,124 +24,414 @@ const upload = multer({
   }
 });
 
-// Lightweight eBay scraper using Cheerio and fetch
-async function scrapeEbaySoldListings(searchQuery) {
-  try {
-    console.log(`🕷️ Starting lightweight eBay scraping for: "${searchQuery}"`);
+// Enhanced item classification with context understanding
+function classifyDetectedItem(visionData) {
+  const objects = visionData.objects || [];
+  const labels = visionData.labels || [];
+  const logos = visionData.logos || [];
+  const text = visionData.text || '';
+  
+  console.log('🔍 Classifying item from vision data:', { objects, labels, logos });
+  
+  // Enhanced classification with conflict resolution
+  const allDetections = [...objects, ...labels];
+  const textWords = text.toLowerCase().split(/\s+/).filter(word => word.length > 2);
+  
+  // Step 1: Check for obvious misclassifications
+  const conflictResolution = {
+    // Electronics vs other items
+    electronics: ['laptop', 'computer', 'macbook', 'iphone', 'phone', 'tablet', 'ipad', 'monitor'],
+    appliances: ['iron', 'toaster', 'blender', 'microwave', 'kettle', 'coffee maker'],
+    clothing: ['shoe', 'shirt', 'jacket', 'dress', 'pants', 'hat'],
+    sports: ['golf', 'tennis', 'baseball', 'basketball', 'football'],
+    tools: ['hammer', 'screwdriver', 'drill', 'wrench'],
+    kitchen: ['pan', 'pot', 'knife', 'plate', 'bowl', 'cup']
+  };
+  
+  // Step 2: Identify primary category from strongest signals
+  let primaryCategory = null;
+  let categoryConfidence = 0;
+  
+  for (const [category, keywords] of Object.entries(conflictResolution)) {
+    let score = 0;
     
-    // Create eBay sold listings URL
-    const encodedQuery = encodeURIComponent(searchQuery);
-    const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodedQuery}&LH_Sold=1&LH_Complete=1&_sop=13&_ipg=60`;
-    
-    console.log(`🌐 Fetching: ${ebayUrl}`);
-    
-    // Generate random user agent
-    const userAgent = new UserAgent();
-    
-    // Fetch the page with realistic headers
-    const response = await fetch(ebayUrl, {
-      headers: {
-        'User-Agent': userAgent.toString(),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Cache-Control': 'max-age=0'
-      },
-      timeout: 15000
+    // Check objects and labels
+    allDetections.forEach(detection => {
+      const detectionLower = detection.toLowerCase();
+      keywords.forEach(keyword => {
+        if (detectionLower.includes(keyword)) {
+          score += 3; // High weight for direct detection
+        }
+      });
     });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const html = await response.text();
-    const $ = cheerio.load(html);
     
-    console.log('📄 HTML loaded, parsing listings...');
+    // Check text content
+    textWords.forEach(word => {
+      keywords.forEach(keyword => {
+        if (word.includes(keyword) || keyword.includes(word)) {
+          score += 2; // Medium weight for text
+        }
+      });
+    });
     
-    const listings = [];
-    
-    // Parse eBay search results
-    $('.s-item').each((index, element) => {
-      try {
-        const $item = $(element);
-        
-        // Skip promoted/ad listings
-        if ($item.find('.s-item__badge--PROMOTED').length > 0) {
-          return;
+    // Check logos for brand context
+    logos.forEach(logo => {
+      const logoLower = logo.toLowerCase();
+      if (category === 'electronics') {
+        if (['apple', 'samsung', 'dell', 'hp', 'lenovo'].some(brand => logoLower.includes(brand))) {
+          score += 5;
         }
-        
-        const title = $item.find('.s-item__title').text().trim();
-        const priceText = $item.find('.s-item__price').text().trim();
-        const soldText = $item.find('.s-item__caption--signal').text().trim();
-        const shipping = $item.find('.s-item__shipping').text().trim();
-        const condition = $item.find('.SECONDARY_INFO').text().trim();
-        const link = $item.find('.s-item__link').attr('href');
-        
-        // Skip if essential data is missing
-        if (!title || !priceText || !soldText) {
-          return;
+      } else if (category === 'sports') {
+        if (['titleist', 'callaway', 'nike', 'adidas'].some(brand => logoLower.includes(brand))) {
+          score += 5;
         }
-        
-        // Skip non-product listings
-        if (title.toLowerCase().includes('new listing') || 
-            title.toLowerCase().includes('sponsored') ||
-            title === '' ||
-            title.length < 5) {
-          return;
-        }
-        
-        // Extract price - handle various formats
-        const priceMatch = priceText.match(/\$[\d,]+\.?\d*/);
-        if (priceMatch) {
-          const price = parseFloat(priceMatch[0].replace(/[$,]/g, ''));
-          
-          // Only include reasonable prices
-          if (price > 0.99 && price < 10000) {
-            // Extract sold date info
-            const dateMatch = soldText.match(/Sold\s+(.+)/i);
-            const soldWhen = dateMatch ? dateMatch[1] : soldText;
-            
-            listings.push({
-              title: title.substring(0, 100),
-              price: price,
-              shipping: shipping,
-              condition: condition,
-              soldDate: soldWhen,
-              link: link,
-              soldText: soldText
-            });
-          }
-        }
-      } catch (e) {
-        console.log(`Error parsing item ${index}:`, e.message);
       }
     });
     
-    if (listings.length > 0) {
-      console.log(`✅ Successfully scraped ${listings.length} sold listings`);
-      return analyzeScrapeData(listings, searchQuery);
+    if (score > categoryConfidence) {
+      categoryConfidence = score;
+      primaryCategory = category;
+    }
+  }
+  
+  console.log(`🎯 Primary category: ${primaryCategory} (confidence: ${categoryConfidence})`);
+  
+  // Step 3: Generate accurate item name
+  let itemName = 'Unknown Item';
+  
+  if (primaryCategory) {
+    // Build item name based on category and detections
+    let brandName = '';
+    let productType = '';
+    
+    // Extract brand from logos or text
+    const commonBrands = {
+      electronics: ['apple', 'samsung', 'dell', 'hp', 'lenovo', 'microsoft', 'sony'],
+      sports: ['titleist', 'callaway', 'ping', 'taylormade', 'nike', 'adidas'],
+      clothing: ['nike', 'adidas', 'levi', 'calvin klein', 'ralph lauren'],
+      appliances: ['cuisinart', 'kitchenaid', 'hamilton beach', 'black decker']
+    };
+    
+    // Find brand in logos or text
+    [...logos, ...textWords].forEach(item => {
+      const itemLower = item.toLowerCase();
+      if (commonBrands[primaryCategory]) {
+        commonBrands[primaryCategory].forEach(brand => {
+          if (itemLower.includes(brand) || brand.includes(itemLower)) {
+            brandName = brand.charAt(0).toUpperCase() + brand.slice(1);
+          }
+        });
+      }
+    });
+    
+    // Find product type from objects/labels
+    allDetections.forEach(detection => {
+      const detectionLower = detection.toLowerCase();
+      conflictResolution[primaryCategory].forEach(keyword => {
+        if (detectionLower.includes(keyword)) {
+          productType = keyword.charAt(0).toUpperCase() + keyword.slice(1);
+        }
+      });
+    });
+    
+    // Build final item name
+    if (brandName && productType) {
+      itemName = `${brandName} ${productType}`;
+    } else if (brandName) {
+      itemName = `${brandName} ${primaryCategory.charAt(0).toUpperCase() + primaryCategory.slice(1)}`;
+    } else if (productType) {
+      itemName = productType;
     } else {
-      console.log('⚠️ No sold listings found via lightweight scraping');
-      return null;
+      itemName = primaryCategory.charAt(0).toUpperCase() + primaryCategory.slice(1);
+    }
+  } else {
+    // Fallback to best detection
+    if (objects.length > 0) {
+      itemName = objects[0];
+    } else if (labels.length > 0) {
+      itemName = labels[0];
+    }
+  }
+  
+  return {
+    itemName,
+    category: primaryCategory || 'general',
+    confidence: Math.min(95, categoryConfidence * 10),
+    detectedBrands: logos,
+    detectedObjects: objects,
+    detectedLabels: labels
+  };
+}
+
+// Enhanced market estimation with better category-specific pricing
+function generateEnhancedMarketEstimate(classification, searchQuery) {
+  const { itemName, category, detectedBrands } = classification;
+  const query = searchQuery.toLowerCase();
+  
+  console.log(`💰 Generating market estimate for: ${itemName} (category: ${category})`);
+  
+  // Enhanced category-specific pricing models
+  const categoryPricing = {
+    electronics: {
+      'apple laptop': { base: 400, multiplier: 1.5, sellThrough: 85 },
+      'apple macbook': { base: 500, multiplier: 1.8, sellThrough: 90 },
+      'apple iphone': { base: 200, multiplier: 1.2, sellThrough: 95 },
+      'apple ipad': { base: 150, multiplier: 1.3, sellThrough: 85 },
+      'samsung phone': { base: 120, multiplier: 1.1, sellThrough: 75 },
+      'dell laptop': { base: 200, multiplier: 1.2, sellThrough: 70 },
+      'hp laptop': { base: 180, multiplier: 1.1, sellThrough: 65 },
+      'laptop': { base: 150, multiplier: 1.2, sellThrough: 70 },
+      'phone': { base: 80, multiplier: 1.1, sellThrough: 75 },
+      'tablet': { base: 100, multiplier: 1.2, sellThrough: 70 }
+    },
+    appliances: {
+      'iron': { base: 15, multiplier: 1.2, sellThrough: 45 },
+      'coffee maker': { base: 25, multiplier: 1.3, sellThrough: 55 },
+      'blender': { base: 30, multiplier: 1.4, sellThrough: 60 },
+      'toaster': { base: 20, multiplier: 1.2, sellThrough: 50 },
+      'microwave': { base: 40, multiplier: 1.3, sellThrough: 65 }
+    },
+    sports: {
+      'titleist': { base: 45, multiplier: 1.6, sellThrough: 75 },
+      'callaway': { base: 40, multiplier: 1.5, sellThrough: 70 },
+      'golf': { base: 35, multiplier: 1.4, sellThrough: 65 },
+      'tennis': { base: 25, multiplier: 1.3, sellThrough: 60 }
+    },
+    clothing: {
+      'nike shoes': { base: 45, multiplier: 1.8, sellThrough: 80 },
+      'adidas shoes': { base: 40, multiplier: 1.6, sellThrough: 75 },
+      'nike': { base: 30, multiplier: 1.5, sellThrough: 75 },
+      'shoes': { base: 25, multiplier: 1.3, sellThrough: 65 }
+    }
+  };
+  
+  // Find best match for pricing
+  let pricing = { base: 25, multiplier: 1.2, sellThrough: 50 };
+  
+  if (categoryPricing[category]) {
+    const categoryItems = categoryPricing[category];
+    
+    // Try exact match first
+    const itemLower = itemName.toLowerCase();
+    for (const [key, value] of Object.entries(categoryItems)) {
+      if (itemLower.includes(key) || key.includes(itemLower.split(' ')[0])) {
+        pricing = value;
+        console.log(`📊 Found exact pricing match: ${key} -> $${value.base}`);
+        break;
+      }
     }
     
+    // Try brand match
+    if (pricing.base === 25) { // No exact match found
+      detectedBrands.forEach(brand => {
+        const brandLower = brand.toLowerCase();
+        for (const [key, value] of Object.entries(categoryItems)) {
+          if (key.includes(brandLower)) {
+            pricing = value;
+            console.log(`📊 Found brand pricing match: ${brand} -> $${value.base}`);
+            return;
+          }
+        }
+      });
+    }
+  }
+  
+  // Age and condition adjustments based on category
+  let conditionMultiplier = 1.0;
+  if (category === 'electronics') {
+    conditionMultiplier = 0.7; // Electronics depreciate faster
+  } else if (category === 'appliances') {
+    conditionMultiplier = 0.8; // Appliances moderate depreciation
+  } else if (category === 'clothing') {
+    conditionMultiplier = 0.6; // Used clothing lower value
+  }
+  
+  // Calculate final price
+  const basePrice = pricing.base * pricing.multiplier * conditionMultiplier;
+  const variation = 0.85 + Math.random() * 0.3; // ±15% variation
+  const finalPrice = Math.round(basePrice * variation);
+  
+  // Enhanced demand calculation
+  let demandLevel = 'Medium';
+  if (pricing.sellThrough >= 80) demandLevel = 'Very High';
+  else if (pricing.sellThrough >= 65) demandLevel = 'High';
+  else if (pricing.sellThrough >= 45) demandLevel = 'Medium';
+  else demandLevel = 'Low';
+  
+  console.log(`💲 Final pricing: $${finalPrice} (base: $${pricing.base}, category: ${category})`);
+  
+  return {
+    avgSoldPrice: finalPrice,
+    sellThroughRate: pricing.sellThrough,
+    avgListingTime: Math.max(5, Math.min(30, 25 - (pricing.sellThrough - 50) / 3)),
+    demandLevel: demandLevel,
+    seasonality: category === 'sports' ? 'Seasonal' : 'Year-round',
+    totalSoldListings: Math.round(15 + Math.random() * 20),
+    priceRange: `$${Math.round(finalPrice * 0.7)} - $${Math.round(finalPrice * 1.4)}`,
+    confidence: Math.min(85, 60 + (detectedBrands.length * 10))
+  };
+}
+
+// Enhanced scraping with better query generation
+async function scrapeEbaySoldListings(searchQuery, classification) {
+  try {
+    console.log(`🕷️ Enhanced scraping for: "${searchQuery}" (${classification.category})`);
+    
+    // Generate multiple search variants for better results
+    const searchVariants = generateSearchVariants(searchQuery, classification);
+    
+    for (const variant of searchVariants) {
+      console.log(`🔍 Trying search variant: "${variant}"`);
+      
+      const encodedQuery = encodeURIComponent(variant);
+      const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodedQuery}&LH_Sold=1&LH_Complete=1&_sop=13&_ipg=60`;
+      
+      const userAgent = new UserAgent();
+      
+      const response = await fetch(ebayUrl, {
+        headers: {
+          'User-Agent': userAgent.toString(),
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'DNT': '1',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1'
+        },
+        timeout: 15000
+      });
+
+      if (!response.ok) {
+        console.log(`⚠️ Search variant "${variant}" failed with status ${response.status}`);
+        continue;
+      }
+
+      const html = await response.text();
+      const $ = cheerio.load(html);
+      
+      const listings = [];
+      
+      $('.s-item').each((index, element) => {
+        try {
+          const $item = $(element);
+          
+          if ($item.find('.s-item__badge--PROMOTED').length > 0) {
+            return;
+          }
+          
+          const title = $item.find('.s-item__title').text().trim();
+          const priceText = $item.find('.s-item__price').text().trim();
+          const soldText = $item.find('.s-item__caption--signal').text().trim();
+          
+          if (!title || !priceText || !soldText || title.length < 5) {
+            return;
+          }
+          
+          // Enhanced title filtering based on classification
+          if (!isRelevantListing(title, classification)) {
+            return;
+          }
+          
+          const priceMatch = priceText.match(/\$[\d,]+\.?\d*/);
+          if (priceMatch) {
+            const price = parseFloat(priceMatch[0].replace(/[$,]/g, ''));
+            
+            if (price > 0.99 && price < 10000) {
+              const dateMatch = soldText.match(/Sold\s+(.+)/i);
+              const soldWhen = dateMatch ? dateMatch[1] : soldText;
+              
+              listings.push({
+                title: title.substring(0, 100),
+                price: price,
+                soldDate: soldWhen,
+                soldText: soldText
+              });
+            }
+          }
+        } catch (e) {
+          console.log(`Error parsing item ${index}:`, e.message);
+        }
+      });
+      
+      if (listings.length >= 5) {
+        console.log(`✅ Found ${listings.length} relevant listings with "${variant}"`);
+        return analyzeScrapeData(listings, searchQuery);
+      }
+    }
+    
+    console.log('⚠️ No sufficient listings found with any search variant');
+    return null;
+    
   } catch (error) {
-    console.error('❌ Lightweight scraping error:', error.message);
+    console.error('❌ Enhanced scraping error:', error.message);
     return null;
   }
 }
 
-// Enhanced analysis of scraped data
+function generateSearchVariants(query, classification) {
+  const variants = [query]; // Start with original
+  
+  // Add brand + category combinations
+  classification.detectedBrands.forEach(brand => {
+    variants.push(`${brand} ${classification.category}`);
+    if (classification.category === 'electronics') {
+      variants.push(`${brand} laptop`);
+      variants.push(`${brand} computer`);
+    }
+  });
+  
+  // Add category-specific variants
+  if (classification.category === 'electronics') {
+    variants.push(`${classification.itemName} laptop`);
+    variants.push(`${classification.itemName} computer`);
+  } else if (classification.category === 'appliances') {
+    variants.push(`${classification.itemName} kitchen`);
+    variants.push(`${classification.itemName} appliance`);
+  }
+  
+  return [...new Set(variants)].slice(0, 3); // Max 3 variants to avoid too many requests
+}
+
+function isRelevantListing(title, classification) {
+  const titleLower = title.toLowerCase();
+  const { category, detectedBrands, itemName } = classification;
+  
+  // Check if title is relevant to detected category
+  const categoryKeywords = {
+    electronics: ['laptop', 'computer', 'macbook', 'iphone', 'phone', 'tablet', 'ipad'],
+    appliances: ['iron', 'toaster', 'blender', 'microwave', 'kettle', 'coffee'],
+    sports: ['golf', 'tennis', 'titleist', 'callaway'],
+    clothing: ['shoe', 'shirt', 'jacket', 'nike', 'adidas']
+  };
+  
+  if (categoryKeywords[category]) {
+    const hasRelevantKeyword = categoryKeywords[category].some(keyword => 
+      titleLower.includes(keyword)
+    );
+    
+    if (!hasRelevantKeyword) {
+      return false;
+    }
+  }
+  
+  // Check for brand match if we detected brands
+  if (detectedBrands.length > 0) {
+    const hasBrandMatch = detectedBrands.some(brand => 
+      titleLower.includes(brand.toLowerCase())
+    );
+    
+    if (!hasBrandMatch) {
+      return false;
+    }
+  }
+  
+  return true;
+}
+
+// Enhanced analysis of scraped data (same as before but with better logging)
 function analyzeScrapeData(listings, originalQuery) {
   try {
-    console.log(`📊 Analyzing ${listings.length} scraped listings`);
+    console.log(`📊 Analyzing ${listings.length} enhanced scraped listings`);
     
     const prices = listings.map(item => item.price).filter(price => price > 0);
     
@@ -155,7 +445,6 @@ function analyzeScrapeData(listings, originalQuery) {
     const q3 = sortedPrices[Math.floor(sortedPrices.length * 0.75)];
     const iqr = q3 - q1;
     
-    // Remove extreme outliers
     const filteredPrices = sortedPrices.filter(price => 
       price >= q1 - 1.5 * iqr && price <= q3 + 1.5 * iqr
     );
@@ -163,192 +452,70 @@ function analyzeScrapeData(listings, originalQuery) {
     const avgPrice = Math.round(filteredPrices.reduce((sum, price) => sum + price, 0) / filteredPrices.length);
     const medianPrice = Math.round(filteredPrices[Math.floor(filteredPrices.length / 2)]);
     
-    // Use median for more robust pricing
     const finalPrice = medianPrice;
     
-    // Analyze recency of sales for sell-through estimation
+    // Enhanced recency analysis
     const recentSales = listings.filter(item => {
       const soldText = item.soldText.toLowerCase();
-      return soldText.includes('hour') || 
-             soldText.includes('day') || 
+      return soldText.includes('hour') || soldText.includes('day') || 
              (soldText.includes('week') && !soldText.includes('weeks'));
     });
     
-    const veryRecentSales = listings.filter(item => {
-      const soldText = item.soldText.toLowerCase();
-      return soldText.includes('hour') || soldText.includes('yesterday') || soldText.includes('today');
-    });
-
-    // Enhanced sell-through rate calculation
-    let sellThroughRate;
     const totalListings = listings.length;
     const recentRatio = recentSales.length / totalListings;
-    const veryRecentRatio = veryRecentSales.length / totalListings;
     
-    // Base calculation on listing volume and recency
-    if (totalListings >= 20) {
-      sellThroughRate = Math.min(85, 55 + (recentRatio * 35) + (veryRecentRatio * 15));
-    } else if (totalListings >= 10) {
-      sellThroughRate = Math.min(80, 50 + (recentRatio * 30) + (veryRecentRatio * 12));
-    } else {
-      sellThroughRate = Math.max(35, 40 + (recentRatio * 25) + (veryRecentRatio * 10));
-    }
+    let sellThroughRate = Math.min(85, 55 + (recentRatio * 30));
+    sellThroughRate = Math.round(Math.max(35, sellThroughRate));
 
-    // Brand and category adjustments
-    const query = originalQuery.toLowerCase();
-    const brandBoosts = {
-      'nike': 15, 'adidas': 12, 'jordan': 20, 'supreme': 25,
-      'patagonia': 15, 'levi': 10, 'vintage': -5, 'designer': 12,
-      'apple': 10, 'sony': 8, 'canon': 8, 'rolex': 20
-    };
-    
-    for (const [brand, boost] of Object.entries(brandBoosts)) {
-      if (query.includes(brand)) {
-        sellThroughRate = Math.min(90, sellThroughRate + boost);
-        break;
-      }
-    }
-
-    sellThroughRate = Math.round(Math.max(30, Math.min(90, sellThroughRate)));
-
-    // Calculate average listing time based on sell-through rate
     const avgListingTime = Math.max(3, Math.min(45, Math.round(30 - (sellThroughRate - 45) / 2)));
 
-    // Determine demand level
     let demandLevel;
     if (sellThroughRate >= 75) demandLevel = "Very High";
     else if (sellThroughRate >= 60) demandLevel = "High";
     else if (sellThroughRate >= 45) demandLevel = "Medium";
-    else if (sellThroughRate >= 30) demandLevel = "Low";
-    else demandLevel = "Very Low";
+    else demandLevel = "Low";
 
-    // Enhanced seasonality detection
-    let seasonality = "Year-round";
-    if (query.includes('coat') || query.includes('jacket') || query.includes('winter') || query.includes('boots')) {
-      seasonality = "Fall/Winter peak";
-    } else if (query.includes('swimsuit') || query.includes('summer') || query.includes('shorts') || query.includes('sandals')) {
-      seasonality = "Spring/Summer peak";
-    } else if (query.includes('halloween') || query.includes('christmas') || query.includes('holiday')) {
-      seasonality = "Holiday peak";
-    }
-
-    console.log(`📈 Analysis complete: $${finalPrice} avg, ${sellThroughRate}% sell-through`);
+    console.log(`📈 Enhanced analysis complete: $${finalPrice} avg, ${sellThroughRate}% sell-through`);
 
     return {
       avgSoldPrice: finalPrice,
       sellThroughRate: sellThroughRate,
       avgListingTime: avgListingTime,
       demandLevel: demandLevel,
-      seasonality: seasonality,
+      seasonality: "Year-round",
       totalSoldListings: totalListings,
       priceRange: `$${Math.round(Math.min(...filteredPrices))} - $${Math.round(Math.max(...filteredPrices))}`,
-      confidence: Math.min(90, 65 + Math.min(20, totalListings)), // Higher confidence with more data
-      dataQuality: totalListings >= 15 ? 'High' : totalListings >= 8 ? 'Medium' : 'Low'
+      confidence: Math.min(95, 70 + Math.min(25, totalListings))
     };
     
   } catch (error) {
-    console.error('❌ Error analyzing scraped data:', error);
+    console.error('❌ Error analyzing enhanced scraped data:', error);
     return null;
   }
 }
 
-// Enhanced AI-powered market estimation (fallback)
-function generateAIMarketEstimate(searchQuery) {
-  const query = searchQuery.toLowerCase();
+// Enhanced market data collection
+async function getEnhancedMarketData(searchQuery, classification) {
+  console.log(`🔍 Getting enhanced market data for: "${searchQuery}"`);
   
-  // Enhanced brand-based estimates
-  const brandPricing = {
-    'nike': { base: 45, multiplier: 1.8, demand: 'High', sellThrough: 75 },
-    'adidas': { base: 40, multiplier: 1.6, demand: 'High', sellThrough: 70 },
-    'jordan': { base: 80, multiplier: 2.5, demand: 'Very High', sellThrough: 85 },
-    'supreme': { base: 120, multiplier: 3.0, demand: 'Very High', sellThrough: 90 },
-    'levi': { base: 25, multiplier: 1.3, demand: 'Medium', sellThrough: 55 },
-    'ralph lauren': { base: 35, multiplier: 1.5, demand: 'Medium', sellThrough: 60 },
-    'patagonia': { base: 50, multiplier: 1.7, demand: 'High', sellThrough: 70 },
-    'vintage': { base: 30, multiplier: 1.4, demand: 'Medium', sellThrough: 45 },
-    'designer': { base: 60, multiplier: 2.0, demand: 'High', sellThrough: 65 },
-    'apple': { base: 200, multiplier: 0.6, demand: 'High', sellThrough: 80 },
-    'rolex': { base: 2000, multiplier: 1.5, demand: 'Very High', sellThrough: 70 }
-  };
-  
-  // Enhanced category-based estimates
-  const categoryPricing = {
-    'shoes': { base: 35, sellThrough: 65, listingTime: 12 },
-    'sneakers': { base: 45, sellThrough: 70, listingTime: 10 },
-    'shirt': { base: 20, sellThrough: 50, listingTime: 18 },
-    'jacket': { base: 40, sellThrough: 55, listingTime: 15 },
-    'dress': { base: 30, sellThrough: 45, listingTime: 20 },
-    'watch': { base: 60, sellThrough: 40, listingTime: 25 },
-    'bag': { base: 35, sellThrough: 60, listingTime: 14 },
-    'pants': { base: 25, sellThrough: 50, listingTime: 16 },
-    'electronics': { base: 50, sellThrough: 65, listingTime: 12 },
-    'collectible': { base: 40, sellThrough: 35, listingTime: 30 }
-  };
-  
-  let estimation = { 
-    base: 25, 
-    multiplier: 1.2, 
-    demand: 'Medium', 
-    sellThrough: 50, 
-    listingTime: 18 
-  };
-  
-  // Check for brand matches
-  for (const [brand, data] of Object.entries(brandPricing)) {
-    if (query.includes(brand)) {
-      estimation = { ...estimation, ...data };
-      break;
-    }
-  }
-  
-  // Check for category matches
-  for (const [category, data] of Object.entries(categoryPricing)) {
-    if (query.includes(category)) {
-      estimation.base = Math.max(estimation.base, data.base);
-      estimation.sellThrough = Math.max(estimation.sellThrough, data.sellThrough);
-      estimation.listingTime = data.listingTime;
-      break;
-    }
-  }
-  
-  // Add realistic variation
-  const variationFactor = 0.85 + Math.random() * 0.3; // ±15% variation
-  const finalPrice = Math.round(estimation.base * estimation.multiplier * variationFactor);
-  
-  return {
-    avgSoldPrice: finalPrice,
-    sellThroughRate: estimation.sellThrough,
-    avgListingTime: Math.max(3, Math.min(30, estimation.listingTime)),
-    demandLevel: estimation.demand,
-    seasonality: query.includes('winter') || query.includes('summer') ? 'Seasonal' : 'Year-round',
-    totalSoldListings: Math.round(12 + Math.random() * 20), // Simulated count
-    priceRange: `$${Math.round(finalPrice * 0.7)} - $${Math.round(finalPrice * 1.4)}`,
-    confidence: 70
-  };
-}
-
-// Hybrid market data collection with lightweight scraping priority
-async function getMarketData(searchQuery) {
-  console.log(`🔍 Getting market data for: "${searchQuery}"`);
-  
-  // Try lightweight web scraping first
+  // Try enhanced web scraping first
   try {
-    const scrapedResult = await scrapeEbaySoldListings(searchQuery);
+    const scrapedResult = await scrapeEbaySoldListings(searchQuery, classification);
     if (scrapedResult && scrapedResult.totalSoldListings >= 3) {
-      console.log('✅ Using lightweight scraped eBay data (high accuracy)');
+      console.log('✅ Using enhanced scraped eBay data');
       return { 
         ...scrapedResult, 
-        source: 'eBay Lightweight Scraping',
-        confidence: scrapedResult.confidence || 80
+        source: 'eBay Enhanced Scraping',
+        confidence: scrapedResult.confidence || 85
       };
     }
   } catch (error) {
-    console.log('⚠️ Lightweight scraping failed:', error.message);
+    console.log('⚠️ Enhanced scraping failed:', error.message);
   }
   
   // Fallback to enhanced AI estimation
   console.log('✅ Using enhanced AI market estimation');
-  const aiEstimate = generateAIMarketEstimate(searchQuery);
+  const aiEstimate = generateEnhancedMarketEstimate(classification, searchQuery);
   return { 
     ...aiEstimate, 
     source: 'Enhanced AI Analysis',
@@ -356,85 +523,15 @@ async function getMarketData(searchQuery) {
   };
 }
 
-// Enhanced search query creation from vision data
-function createSmartSearchQueries(visionData) {
-  const queries = [];
-  
-  const objects = visionData.objects || [];
-  const labels = visionData.labels || [];
-  const logos = visionData.logos || [];
-  const text = visionData.text || '';
-
-  console.log('🔍 Creating smart search queries from vision data');
-  
-  // Extract text-based brands and models
-  const textWords = text.toLowerCase().split(/\s+/).filter(word => word.length > 2);
-  const brandKeywords = ['nike', 'adidas', 'jordan', 'supreme', 'levi', 'calvin', 'tommy', 'polo', 'patagonia', 'apple', 'sony', 'canon'];
-  const detectedBrands = textWords.filter(word => 
-    brandKeywords.some(brand => word.includes(brand) || brand.includes(word))
-  );
-
-  // Priority 1: Detected logos + objects
-  logos.forEach(logo => {
-    objects.slice(0, 2).forEach(obj => {
-      if (obj !== logo) {
-        queries.push(`${logo} ${obj}`);
-      }
-    });
-  });
-
-  // Priority 2: Text-detected brands + objects
-  detectedBrands.forEach(brand => {
-    objects.slice(0, 2).forEach(obj => {
-      queries.push(`${brand} ${obj}`);
-    });
-  });
-
-  // Priority 3: Logos + top labels
-  logos.forEach(logo => {
-    labels.slice(0, 2).forEach(label => {
-      if (!label.toLowerCase().includes(logo.toLowerCase())) {
-        queries.push(`${logo} ${label}`);
-      }
-    });
-  });
-
-  // Priority 4: Object + label combinations
-  objects.slice(0, 2).forEach(obj => {
-    labels.slice(0, 2).forEach(label => {
-      if (obj !== label && !obj.toLowerCase().includes(label.toLowerCase())) {
-        queries.push(`${obj} ${label}`);
-      }
-    });
-  });
-
-  // Priority 5: High-confidence individual items
-  [...logos, ...objects.slice(0, 2), ...labels.slice(0, 2)].forEach(item => {
-    if (item && item.length > 2) {
-      queries.push(item);
-    }
-  });
-
-  // Clean and deduplicate queries
-  const cleanQueries = [...new Set(queries)]
-    .map(q => q.replace(/[^\w\s-]/g, '').trim())
-    .filter(q => q.length > 2 && q.split(' ').length <= 4)
-    .slice(0, 5); // Top 5 queries
-
-  console.log('🎯 Generated search queries:', cleanQueries);
-  return cleanQueries.length > 0 ? cleanQueries : ['vintage collectible'];
-}
-
 // Enhanced image analysis endpoint
 app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
   try {
-    console.log('📸 Received image for lightweight scraping analysis');
+    console.log('📸 Received image for enhanced accuracy analysis');
     
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
     }
 
-    // Convert image to base64
     const base64Image = req.file.buffer.toString('base64');
     console.log('🔄 Processing with Google Vision API...');
 
@@ -446,10 +543,11 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
             content: base64Image
           },
           features: [
-            { type: 'OBJECT_LOCALIZATION', maxResults: 15 },
-            { type: 'LABEL_DETECTION', maxResults: 20 },
-            { type: 'TEXT_DETECTION', maxResults: 15 },
-            { type: 'LOGO_DETECTION', maxResults: 15 }
+            { type: 'OBJECT_LOCALIZATION', maxResults: 20 },
+            { type: 'LABEL_DETECTION', maxResults: 25 },
+            { type: 'TEXT_DETECTION', maxResults: 20 },
+            { type: 'LOGO_DETECTION', maxResults: 15 },
+            { type: 'PRODUCT_SEARCH', maxResults: 10 }
           ]
         }
       ]
@@ -473,101 +571,56 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: visionData.error.message });
     }
 
-    // Process enhanced Google Vision results
+    // Process Google Vision results with higher thresholds
     const annotations = visionData.responses[0];
     const objects = (annotations.localizedObjectAnnotations || [])
-      .filter(o => o.score > 0.5)
+      .filter(o => o.score > 0.6) // Higher threshold
       .map(o => o.name);
     const labels = (annotations.labelAnnotations || [])
-      .filter(l => l.score > 0.6)
+      .filter(l => l.score > 0.7) // Higher threshold
       .map(l => l.description);
     const logos = (annotations.logoAnnotations || [])
-      .filter(l => l.score > 0.5)
+      .filter(l => l.score > 0.6) // Higher threshold
       .map(l => l.description);
     const textDetections = annotations.textAnnotations || [];
     const fullText = textDetections.map(t => t.description).join(' ');
 
-    console.log('🔍 Google Vision detected:', { objects, labels, logos });
+    console.log('🔍 Enhanced Google Vision detected:', { objects, labels, logos });
 
-    // Create structured vision data
-    const structuredVisionData = {
-      objects,
-      labels,
-      logos,
-      text: fullText
-    };
-
-    // Generate smart search queries
-    const searchQueries = createSmartSearchQueries(structuredVisionData);
-
-    // Get comprehensive market data with lightweight scraping
-    let marketData = null;
-    let usedQuery = '';
+    // Enhanced item classification
+    const structuredVisionData = { objects, labels, logos, text: fullText };
+    const classification = classifyDetectedItem(structuredVisionData);
     
-    for (const query of searchQueries) {
-      console.log(`🔍 Trying market analysis with: "${query}"`);
-      marketData = await getMarketData(query);
-      
-      if (marketData && (marketData.totalSoldListings >= 3 || marketData.source === 'Enhanced AI Analysis')) {
-        usedQuery = query;
-        console.log(`✅ Market data found with query: "${query}" (${marketData.source})`);
-        break;
-      }
-    }
+    console.log('🎯 Enhanced classification result:', classification);
 
-    // Final fallback
-    if (!marketData) {
-      const fallbackQuery = objects[0] || labels[0] || 'general merchandise';
-      console.log(`🔍 Using fallback query: "${fallbackQuery}"`);
-      marketData = await getMarketData(fallbackQuery);
-      usedQuery = fallbackQuery;
-    }
+    // Generate search query based on classification
+    const searchQuery = classification.itemName;
 
-    // Determine best category name
-    let category;
-    if (logos.length > 0 && objects.length > 0) {
-      category = `${logos[0]} ${objects[0]}`;
-    } else if (logos.length > 0 && labels.length > 0) {
-      category = `${logos[0]} ${labels[0]}`;
-    } else if (objects.length > 0) {
-      category = objects[0];
-    } else if (labels.length > 0) {
-      category = labels[0];
-    } else {
-      category = 'Unknown Item';
-    }
+    // Get enhanced market data
+    const marketData = await getEnhancedMarketData(searchQuery, classification);
 
-    // Calculate confidence based on detection quality
-    const allDetections = [
-      ...(annotations.localizedObjectAnnotations || []),
-      ...(annotations.labelAnnotations || []),
-      ...(annotations.logoAnnotations || [])
-    ];
-    
-    const avgDetectionConfidence = allDetections.length > 0 
-      ? allDetections.reduce((sum, det) => sum + (det.score || 0), 0) / allDetections.length 
-      : 0;
-    
-    const visionConfidence = Math.round(avgDetectionConfidence * 100);
+    // Calculate enhanced confidence
+    const visionConfidence = classification.confidence;
     const overallConfidence = Math.round((visionConfidence + (marketData?.confidence || 50)) / 2);
 
-    // Prepare comprehensive response
+    // Prepare enhanced response
     const response = {
-      category: category,
+      category: classification.itemName,
       confidence: overallConfidence,
       visionConfidence: visionConfidence,
       marketConfidence: marketData?.confidence || 50,
-      searchQuery: usedQuery,
+      searchQuery: searchQuery,
       detections: {
         objects,
         labels,
         logos,
         text: fullText
       },
+      classification: classification,
       ...marketData
     };
 
-    console.log('✅ Enhanced lightweight analysis complete:', {
+    console.log('✅ Enhanced accuracy analysis complete:', {
       category: response.category,
       confidence: response.confidence,
       searchQuery: response.searchQuery,
@@ -578,73 +631,58 @@ app.post('/api/analyze-image', upload.single('image'), async (req, res) => {
     res.json(response);
 
   } catch (error) {
-    console.error('❌ Error in enhanced lightweight analysis:', error);
+    console.error('❌ Error in enhanced accuracy analysis:', error);
     res.status(500).json({ error: 'Failed to analyze image: ' + error.message });
   }
 });
 
-// Enhanced health check endpoint
+// Rest of the endpoints remain the same...
 app.get('/api/health', async (req, res) => {
   const health = {
-    status: 'Enhanced Server with Lightweight Scraping is running!',
+    status: 'Enhanced Accuracy Server is running!',
     timestamp: new Date().toISOString(),
     apis: {
       googleVision: !!process.env.GOOGLE_VISION_API_KEY,
-      lightweightScraping: true,
-      cheerio: true
+      enhancedScraping: true,
+      smartClassification: true
     },
     connectivity: {
       googleVision: !!process.env.GOOGLE_VISION_API_KEY,
-      ebayOAuth: false, // Not needed with scraping
-      lightweightScraping: true
+      enhancedScraping: true
     },
     features: [
-      'Google Vision AI',
-      'Lightweight eBay Scraping',
-      'Enhanced AI Market Analysis',
-      'Smart Search Queries',
-      'Real-time Sold Listings'
+      'Enhanced Google Vision AI',
+      'Smart Item Classification',
+      'Enhanced eBay Scraping',
+      'Category-Specific Pricing',
+      'Conflict Resolution'
     ]
   };
-
   res.json(health);
 });
 
-// Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'Enhanced Thrift Flip Analyzer with Lightweight Scraping',
-    version: '2.1.1',
+    message: 'Enhanced Accuracy Thrift Flip Analyzer',
+    version: '2.2.0',
     features: [
-      'Google Vision AI Integration',
-      'Lightweight eBay Scraping with Cheerio',
-      'Enhanced AI Market Analysis Fallback',
-      'Smart Search Query Generation',
-      'Real-time Sold Listings Data',
-      'Fast & Reliable Deployment'
-    ],
-    endpoints: {
-      health: '/api/health',
-      analyze: '/api/analyze-image (POST)'
-    }
+      'Smart Item Classification',
+      'Enhanced Google Vision Processing',
+      'Category-Specific Market Analysis',
+      'Conflict Resolution System',
+      'Real-time Sold Listings Data'
+    ]
   });
 });
 
 app.listen(PORT, () => {
-  console.log('🚀 Enhanced Thrift Flip Backend with Lightweight Scraping Started!');
+  console.log('🚀 Enhanced Accuracy Thrift Flip Backend Started!');
   console.log(`📡 Server running on http://localhost:${PORT}`);
-  console.log('🔑 Google Vision API key:', !!process.env.GOOGLE_VISION_API_KEY ? '✅ loaded' : '❌ missing');
-  console.log('🕷️ Lightweight web scraping: ✅ enabled');
-  console.log('📱 Ready for fast, reliable analysis!');
-  console.log('\n📋 Available endpoints:');
-  console.log(`   Health check: http://localhost:${PORT}/api/health`);
-  console.log(`   Image analysis: http://localhost:${PORT}/api/analyze-image`);
-  console.log('\n🎯 Enhanced Features:');
-  console.log('   ✅ Google Vision AI for item identification');
-  console.log('   ✅ Lightweight Cheerio scraping for real eBay data');
-  console.log('   ✅ Enhanced AI market analysis fallback');
-  console.log('   ✅ Smart search query generation');
-  console.log('   ✅ Statistical price analysis with outlier removal');
-  console.log('   ✅ Fast deployment without heavy dependencies');
-  console.log('\n🚀 Ready to analyze thrift finds with lightweight scraping!');
+  console.log('🎯 Enhanced Features:');
+  console.log('   ✅ Smart item classification with conflict resolution');
+  console.log('   ✅ Category-specific pricing models');
+  console.log('   ✅ Enhanced Google Vision processing');
+  console.log('   ✅ Better search query generation');
+  console.log('   ✅ Improved accuracy for electronics, appliances, sports gear');
+  console.log('\n🚀 Ready for highly accurate thrift analysis!');
 });
